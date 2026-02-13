@@ -132,7 +132,7 @@ class FlocsSlurmProcessor:
         ] = "flocs_processing",
     ):
         self.DATABASE = database
-        self.SLURM_QUEUES = slurm_queues
+        self.SLURM_QUEUES = ",".join(slurm_queues)
         self.TABLE_NAME = table_name
         self.RUNDIR = rundir
 
