@@ -538,6 +538,13 @@ class FlocsSlurmProcessor:
     def is_processing(self, name):
         return name not in [v["name"] for f, v in self.running_fields.items()]
 
+    def set_status_processing(self, name, identifier, target):
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            cursor.execute(
+                f"update {self.TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.processing.value} where source_name=='{name}' and sas_id_target=='{target}'"
+            )
+
     def start_processing_loop(self, allow_up_to=PIPELINE.linc_calibrator):
         print("Starting processing loop")
         allow_up_to = PIPELINE.linc_target
@@ -561,8 +568,6 @@ class FlocsSlurmProcessor:
                     break
                 self.is_accepting_jobs = len(self.running_fields) < MAX_RUNNING
                 if allow_up_to >= PIPELINE.linc_calibrator:
-                    not_started1 = self.get_not_started("calibrator1")
-                    not_started2 = self.get_not_started("calibrator2")
                     restart1 = self.get_failed("calibrator1")
                     restart2 = self.get_failed("calibrator2")
                     if restart1:
@@ -581,11 +586,7 @@ class FlocsSlurmProcessor:
                                         "identifier": "calibrator1",
                                         "sasid": target,
                                     }
-                                with sqlite3.connect(self.DATABASE) as db:
-                                    cursor = db.cursor()
-                                    cursor.execute(
-                                        f"update {self.TABLE_NAME} set status_calibrator1={PIPELINE_STATUS.processing.value} where source_name=='{name}' and sas_id_target=='{target}'"
-                                    )
+                                self.set_status_processing(name, "calibrator1", target)
                     if restart2:
                         for name, cal1, cal2, cal_final, target, _, _, _, _ in restart2:
                             if not self.is_processing(name) and self.is_accepting_jobs:
@@ -602,11 +603,10 @@ class FlocsSlurmProcessor:
                                         "identifier": "calibrator2",
                                         "sasid": target,
                                     }
-                                with sqlite3.connect(self.DATABASE) as db:
-                                    cursor = db.cursor()
-                                    cursor.execute(
-                                        f"update {self.TABLE_NAME} set status_calibrator2={PIPELINE_STATUS.processing.value} where source_name=='{name}' and sas_id_target=='{target}'"
-                                    )
+                                self.set_status_processing(name, "calibrator2", target)
+
+                    not_started1 = self.get_not_started("calibrator1")
+                    not_started2 = self.get_not_started("calibrator2")
                     if not_started1:
                         for (
                             name,
@@ -633,11 +633,7 @@ class FlocsSlurmProcessor:
                                         "identifier": "calibrator1",
                                         "sasid": target,
                                     }
-                                with sqlite3.connect(self.DATABASE) as db:
-                                    cursor = db.cursor()
-                                    cursor.execute(
-                                        f"update {self.TABLE_NAME} set status_calibrator1={PIPELINE_STATUS.processing.value} where source_name=='{name}' and sas_id_target=='{target}'"
-                                    )
+                                self.set_status_processing(name, "calibrator1", target)
                     if not_started2:
                         for (
                             name,
@@ -664,23 +660,13 @@ class FlocsSlurmProcessor:
                                         "identifier": "calibrator2",
                                         "sasid": target,
                                     }
-                                with sqlite3.connect(self.DATABASE) as db:
-                                    cursor = db.cursor()
-                                    cursor.execute(
-                                        f"update {self.TABLE_NAME} set status_calibrator2={PIPELINE_STATUS.processing.value} where source_name=='{name}' and sas_id_target=='{target}'"
-                                    )
+                                self.set_status_processing(name, "calibrator2", target)
                 if allow_up_to >= PIPELINE.linc_target:
-                    not_started = self.get_not_started("target")
                     restart = self.get_failed("target")
                     if restart:
                         for name, cal1, cal2, cal_final, target, _, _, _, _ in restart:
                             if not self.is_processing(name) and self.is_accepting_jobs:
                                 print(f"Re-starting LINC target for field {name}")
-                                with sqlite3.connect(self.DATABASE) as db:
-                                    cursor = db.cursor()
-                                    cursor.execute(
-                                        f"update {self.TABLE_NAME} set status_target={PIPELINE_STATUS.processing.value} where source_name=='{name}'"
-                                    )
                                 with lock:
                                     future = tpe.submit(
                                         self.launch_target,
@@ -695,7 +681,10 @@ class FlocsSlurmProcessor:
                                         "sasid": target,
                                         "identifier": "target",
                                     }
+                                self.set_status_processing(name, "target", target)
                                 print(f"Launched {name}")
+
+                    not_started = self.get_not_started("target")
                     if not_started:
                         for (
                             name,
@@ -710,11 +699,6 @@ class FlocsSlurmProcessor:
                         ) in not_started:
                             if not self.is_processing(name) and self.is_accepting_jobs:
                                 print(f"Starting LINC target for field {name}")
-                                with sqlite3.connect(self.DATABASE) as db:
-                                    cursor = db.cursor()
-                                    cursor.execute(
-                                        f"update {self.TABLE_NAME} set status_target={PIPELINE_STATUS.processing.value} where source_name=='{name}'"
-                                    )
                                 with lock:
                                     future = tpe.submit(
                                         self.launch_target, name, target, cal_final
@@ -725,28 +709,14 @@ class FlocsSlurmProcessor:
                                         "sasid": target,
                                         "identifier": "target",
                                     }
+                                self.set_status_processing(name, "target", target)
                                 print(f"Launched {name}")
                 if allow_up_to >= PIPELINE.vlbi_delay:
-                    print("Checking for new VLBI delay fields")
-                    with sqlite3.connect(self.DATABASE) as db:
-                        cursor = db.cursor()
-                        not_started = cursor.execute(
-                            f"select * from {self.TABLE_NAME} where status_delay=={PIPELINE_STATUS.downloaded.value} and status_target=={PIPELINE_STATUS.finished.value}"
-                        ).fetchall()
-                        restart = cursor.execute(
-                            f"select * from {self.TABLE_NAME} where status_delay=={PIPELINE_STATUS.error.value}"
-                        ).fetchall()
-                    not_started = self.get_not_started("delay")
                     restart = self.get_failed("delay")
                     if restart:
                         for name, cal1, cal2, cal_final, target, _, _, _, _ in restart:
                             if not self.is_processing(name) and self.is_accepting_jobs:
                                 print(f"Re-starting VLBI delay for field {name}")
-                                with sqlite3.connect(self.DATABASE) as db:
-                                    cursor = db.cursor()
-                                    cursor.execute(
-                                        f"update {self.TABLE_NAME} set status_delay={PIPELINE_STATUS.processing.value} where source_name=='{name}'"
-                                    )
                                 with lock:
                                     future = tpe.submit(
                                         self.launch_vlbi_delay,
@@ -760,7 +730,10 @@ class FlocsSlurmProcessor:
                                         "sasid": target,
                                         "identifier": "delay",
                                     }
+                                self.set_status_processing(name, "delay", target)
                                 print(f"Launched {name}")
+
+                    not_started = self.get_not_started("delay")
                     if not_started:
                         for (
                             name,
@@ -775,11 +748,6 @@ class FlocsSlurmProcessor:
                         ) in not_started:
                             if not self.is_processing(name) and self.is_accepting_jobs:
                                 print(f"Starting VLBI delay for field {name}")
-                                with sqlite3.connect(self.DATABASE) as db:
-                                    cursor = db.cursor()
-                                    cursor.execute(
-                                        f"update {self.TABLE_NAME} set status_delay={PIPELINE_STATUS.processing.value} where source_name=='{name}'"
-                                    )
                                 with lock:
                                     future = tpe.submit(
                                         self.launch_vlbi_delay, name, target
@@ -790,6 +758,7 @@ class FlocsSlurmProcessor:
                                         "sasid": target,
                                         "identifier": "delay",
                                     }
+                                self.set_status_processing(name, "delay", target)
                                 print(f"Launched {name}")
                     else:
                         print("no new fields for VLBI delay")
