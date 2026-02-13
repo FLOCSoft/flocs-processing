@@ -10,7 +10,7 @@ requires-python = ">3.9"
 dependencies = ["cyclopts", "structlog", "packaging"]
 
 [project.scripts]
-flocs-processing = "flocs_database.flocs_processing:main"
+flocs-processing = "flocs_processing.flocs_processing:main"
 
 [tool.setuptools]
 packages = ["flocs_processing"]
