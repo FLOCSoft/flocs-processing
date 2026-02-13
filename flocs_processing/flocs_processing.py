@@ -117,7 +117,7 @@ def process_from_database(
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
 ):
-    fp = FlocsSlurmProcessor(dbname, slurm_queues, table_name)
+    fp = FlocsSlurmProcessor(database=dbname, slurm_queues=slurm_queues, table_name=table_name, rundir=rundir)
     fp.start_processing_loop()
 
 
