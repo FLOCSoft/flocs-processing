@@ -2,6 +2,7 @@
 from concurrent.futures import ProcessPoolExecutor
 from cyclopts import Parameter
 from enum import Enum
+from rich.console import Console
 from typing import Annotated, Iterable
 import cyclopts
 import functools
@@ -32,6 +33,17 @@ class PIPELINE(Enum):
         if self.__class__ is not other.__class__:
             raise NotImplementedError
         return self.value < other.value
+
+    def __hash__(self):
+        return hash(self.value)
+
+
+PIPELINE_NAMES: dict[PIPELINE, str] = {
+    PIPELINE.download: "not downloaded",
+    PIPELINE.linc_calibrator: "LINC Calibrator",
+    PIPELINE.linc_target: "LINC Target",
+    PIPELINE.vlbi_delay: "PILOT delay calibration",
+}
 
 
 @functools.total_ordering
@@ -117,7 +129,9 @@ def process_from_database(
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
 ):
-    fp = FlocsSlurmProcessor(database=dbname, slurm_queues=slurm_queues, table_name=table_name, rundir=rundir)
+    fp = FlocsSlurmProcessor(
+        database=dbname, slurm_queues=slurm_queues, table_name=table_name, rundir=rundir
+    )
     fp.start_processing_loop()
 
 
@@ -443,17 +457,20 @@ class FlocsSlurmProcessor:
 
     def update_db_statuses(self, running_fields: dict):
         print("== UPDATING DB STATUSES ==")
+        console = Console(highlight=False)
         futures = running_fields.keys()
         to_delete = set()
         for future in futures:
-            print("Processing future", future)
+            console.print(f"Field: {future['field']}")
+            console.print(f"= SAS ID: {future['sasid']}")
+            console.print(f"= Pipeline: {PIPELINE_NAMES[future['pipeline']]}")
             field = running_fields[future]
             if future.cancelled():
-                print("Future has been cancelled")
+                console.print("= Status: [bold yellow]cancelled[/bold yellow]")
                 del running_fields[future]
             elif future.done():
                 if future.exception(timeout=10):
-                    print("Future has errored")
+                    console.print("= Status: [bold red]failed[/bold red]")
                     print(
                         f"Processing {field['identifier']} for {field['name']} failed."
                     )
@@ -464,7 +481,7 @@ class FlocsSlurmProcessor:
                             f"update {self.TABLE_NAME} set status_{field['identifier']}={PIPELINE_STATUS.error.value} where source_name=='{field['name']}'"
                         )
                 else:
-                    print("Future is done")
+                    console.print("= Status: [bold green]finished[/bold green]")
                     result = future.result()
                     print(f"Result was {result}")
                     with sqlite3.connect(self.DATABASE) as db:
@@ -488,6 +505,8 @@ class FlocsSlurmProcessor:
                                 f"Processing {field['identifier']} for {field['name']} failed."
                             )
                 to_delete.add(future)
+            else:
+                console.print("= Status: [bold cyan]running[/bold cyan]")
         for f in to_delete:
             running_fields.pop(f, None)
         print("== UPDATING DB STATUSES FINISHED")
