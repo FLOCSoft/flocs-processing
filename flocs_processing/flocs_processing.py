@@ -415,6 +415,8 @@ class FlocsSlurmProcessor:
         return False
 
     def summarise_status(self):
+        console = Console(highlight=False)
+        console.print(f"General statistics for {self.DATABASE}", style="bold")
         with sqlite3.connect(self.DATABASE) as db:
             cursor = db.cursor()
             not_started = cursor.execute(
@@ -423,16 +425,21 @@ class FlocsSlurmProcessor:
             downloaded = cursor.execute(
                 f"select count(source_name) from {self.TABLE_NAME} where (status_calibrator1=={PIPELINE_STATUS.downloaded.value} or status_calibrator2=={PIPELINE_STATUS.downloaded.value})"
             ).fetchall()[0][0]
+            processing = cursor.execute(
+                f"select count(source_name) from {self.TABLE_NAME} where (status_calibrator1=={PIPELINE_STATUS.processing.value} or status_calibrator2=={PIPELINE_STATUS.processing.value})"
+            ).fetchall()[0][0]
             finished = cursor.execute(
                 f"select count(source_name) from {self.TABLE_NAME} where (status_calibrator1=={PIPELINE_STATUS.finished.value} or status_calibrator2=={PIPELINE_STATUS.finished.value})"
             ).fetchall()[0][0]
             error = cursor.execute(
                 f"select count(source_name) from {self.TABLE_NAME} where (status_calibrator1=={PIPELINE_STATUS.error.value} or status_calibrator2=={PIPELINE_STATUS.error.value})"
             ).fetchall()[0][0]
-            print(f"{not_started} calibrators not yet started")
-            print(f"{downloaded} calibrators downloaded")
-            print(f"{finished} calibrators finished")
-            print(f"{error} calibrators failed")
+            console.print("Flux density calibrators", style="bold")
+            console.print(f"= {not_started} calibrators not yet downloaded")
+            console.print(f"= {downloaded} calibrators downloaded", style="yellow")
+            console.print(f"= {processing} calibrators processing", style="cyan")
+            console.print(f"= {finished} calibrators finished", style="green")
+            console.print(f"= {error} calibrators failed", style="red")
 
             not_started = cursor.execute(
                 f"select count(source_name) from {self.TABLE_NAME} where status_target=={PIPELINE_STATUS.nothing.value}"
@@ -449,11 +456,12 @@ class FlocsSlurmProcessor:
             error = cursor.execute(
                 f"select count(source_name) from {self.TABLE_NAME} where status_target=={PIPELINE_STATUS.error.value}"
             ).fetchall()[0][0]
-            print(f"{not_started} targets not yet started")
-            print(f"{downloaded} targets downloaded")
-            print(f"{finished} targets finished")
-            print(f"{processing} targets processing")
-            print(f"{error} targets failed")
+            console.print("\nFields / science targets", style="bold")
+            console.print(f"= {not_started} targets not yet downloaded")
+            console.print(f"= {downloaded} targets downloaded", style="yellow")
+            console.print(f"= {processing} targets processing", style="cyan")
+            console.print(f"= {finished} targets finished", style="green")
+            console.print(f"= {error} targets failed", style="red")
 
     def update_db_statuses(self, running_fields: dict):
         print("== UPDATING DB STATUSES ==")
@@ -523,10 +531,6 @@ class FlocsSlurmProcessor:
             lock = threading.RLock()
 
             while True:
-                print("Currently running fields:")
-                print(running_fields)
-                print("Currently staging fields:")
-                print(staging_fields)
                 if len(running_fields) < 1 and len(staging_fields) < 1:
                     noqueue += 1
                 else:
@@ -539,7 +543,6 @@ class FlocsSlurmProcessor:
                     break
                 if allow_up_to >= PIPELINE.linc_calibrator:
                     with sqlite3.connect(self.DATABASE) as db:
-                        print("Checking for new LINC Calibrator fields")
                         cursor = db.cursor()
                         not_started1 = cursor.execute(
                             f"select * from {self.TABLE_NAME} where status_calibrator1=={PIPELINE_STATUS.downloaded.value}"
@@ -671,10 +674,7 @@ class FlocsSlurmProcessor:
                                     cursor.execute(
                                         f"update {self.TABLE_NAME} set status_calibrator2={PIPELINE_STATUS.processing.value} where source_name=='{name}' and sas_id_target=='{target}'"
                                     )
-                    else:
-                        print("no new fields for LINC calibrator")
                 if allow_up_to >= PIPELINE.linc_target:
-                    print("Checking for new LINC Target fields")
                     with sqlite3.connect(self.DATABASE) as db:
                         cursor = db.cursor()
                         not_started = cursor.execute(
@@ -753,8 +753,6 @@ class FlocsSlurmProcessor:
                                         "identifier": "target",
                                     }
                                 print(f"Launched {name}")
-                    else:
-                        print("no new fields for LINC target")
                 if allow_up_to >= PIPELINE.vlbi_delay:
                     print("Checking for new VLBI delay fields")
                     with sqlite3.connect(self.DATABASE) as db:
