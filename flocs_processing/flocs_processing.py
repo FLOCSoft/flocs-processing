@@ -519,6 +519,22 @@ class FlocsSlurmProcessor:
             running_fields.pop(f, None)
         print("== UPDATING DB STATUSES FINISHED")
 
+    def get_not_started(self, identifier: str):
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            not_started = cursor.execute(
+                f"select * from {self.TABLE_NAME} where status_{identifier}=={PIPELINE_STATUS.downloaded.value}"
+            ).fetchall()
+        return not_started
+
+    def get_failed(self, identifier: str):
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            restart = cursor.execute(
+                f"select * from {self.TABLE_NAME} where status_{identifier}=={PIPELINE_STATUS.error.value}"
+            ).fetchall()
+        return restart
+
     def start_processing_loop(self, allow_up_to=PIPELINE.linc_calibrator):
         print("Starting processing loop")
         allow_up_to = PIPELINE.linc_target
@@ -542,22 +558,10 @@ class FlocsSlurmProcessor:
                     )
                     break
                 if allow_up_to >= PIPELINE.linc_calibrator:
-                    with sqlite3.connect(self.DATABASE) as db:
-                        cursor = db.cursor()
-                        not_started1 = cursor.execute(
-                            f"select * from {self.TABLE_NAME} where status_calibrator1=={PIPELINE_STATUS.downloaded.value}"
-                        ).fetchall()
-                        not_started2 = cursor.execute(
-                            f"select * from {self.TABLE_NAME} where status_calibrator2=={PIPELINE_STATUS.downloaded.value}"
-                        ).fetchall()
-
-                        restart1 = cursor.execute(
-                            f"select * from {self.TABLE_NAME} where status_calibrator1=={PIPELINE_STATUS.error.value}"
-                        ).fetchall()
-                        restart2 = cursor.execute(
-                            f"select * from {self.TABLE_NAME} where status_calibrator2=={PIPELINE_STATUS.error.value}"
-                        ).fetchall()
-
+                    not_started1 = self.get_not_started("calibrator1")
+                    not_started2 = self.get_not_started("calibrator2")
+                    restart1 = self.get_failed("calibrator1")
+                    restart2 = self.get_failed("calibrator2")
                     if restart1:
                         for name, cal1, cal2, cal_final, target, _, _, _, _ in restart1:
                             if (
@@ -675,14 +679,8 @@ class FlocsSlurmProcessor:
                                         f"update {self.TABLE_NAME} set status_calibrator2={PIPELINE_STATUS.processing.value} where source_name=='{name}' and sas_id_target=='{target}'"
                                     )
                 if allow_up_to >= PIPELINE.linc_target:
-                    with sqlite3.connect(self.DATABASE) as db:
-                        cursor = db.cursor()
-                        not_started = cursor.execute(
-                            f"select * from {self.TABLE_NAME} where status_target=={PIPELINE_STATUS.downloaded.value} and sas_id_calibrator_final is not null"
-                        ).fetchall()
-                        restart = cursor.execute(
-                            f"select * from {self.TABLE_NAME} where status_target=={PIPELINE_STATUS.error.value}"
-                        ).fetchall()
+                    not_started = self.get_not_started("target")
+                    restart = self.get_failed("target")
                     if restart:
                         for name, cal1, cal2, cal_final, target, _, _, _, _ in restart:
                             if (not running_fields) or (
@@ -763,6 +761,8 @@ class FlocsSlurmProcessor:
                         restart = cursor.execute(
                             f"select * from {self.TABLE_NAME} where status_delay=={PIPELINE_STATUS.error.value}"
                         ).fetchall()
+                    not_started = self.get_not_started("delay")
+                    restart = self.get_failed("delay")
                     if restart:
                         for name, cal1, cal2, cal_final, target, _, _, _, _ in restart:
                             if (not running_fields) or (
