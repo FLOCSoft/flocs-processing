@@ -688,8 +688,8 @@ class FlocsSlurmProcessor:
                     if not_started:
                         for (
                             name,
-                            cal1,
-                            cal2,
+                            _,
+                            _,
                             cal_final,
                             target,
                             _,
@@ -714,7 +714,7 @@ class FlocsSlurmProcessor:
                 if allow_up_to >= PIPELINE.vlbi_delay:
                     restart = self.get_failed("delay")
                     if restart:
-                        for name, cal1, cal2, cal_final, target, _, _, _, _ in restart:
+                        for name, _, _, _, target, _, _, _, _ in restart:
                             if not self.is_processing(name) and self.is_accepting_jobs:
                                 print(f"Re-starting VLBI delay for field {name}")
                                 with lock:
@@ -737,9 +737,9 @@ class FlocsSlurmProcessor:
                     if not_started:
                         for (
                             name,
-                            cal1,
-                            cal2,
-                            cal_final,
+                            _,
+                            _,
+                            _,
                             target,
                             _,
                             _,
