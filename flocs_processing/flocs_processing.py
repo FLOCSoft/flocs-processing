@@ -536,7 +536,7 @@ class FlocsSlurmProcessor:
         return restart
 
     def is_processing(self, name):
-        return name not in [v["name"] for f, v in self.running_fields.items()]
+        return name in [v["name"] for f, v in self.running_fields.items()]
 
     def set_status_processing(self, name, identifier, target):
         with sqlite3.connect(self.DATABASE) as db:
