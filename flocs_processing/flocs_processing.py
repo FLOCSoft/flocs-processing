@@ -469,7 +469,7 @@ class FlocsSlurmProcessor:
         futures = self.running_fields.keys()
         to_delete = set()
         for future in futures:
-            console.print(f"Field: {future['field']}")
+            console.print(f"Field: {future['name']}")
             console.print(f"= SAS ID: {future['sasid']}")
             console.print(f"= Pipeline: {PIPELINE_NAMES[future['pipeline']]}")
             field = self.running_fields[future]
