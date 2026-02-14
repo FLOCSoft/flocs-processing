@@ -231,6 +231,7 @@ class FlocsSlurmProcessor:
                     f"{self.RUNDIR}/{field_name}/LINC_calibrator_L{sas_id_cal}*/results_LINC_calibrator/cal_solutions.h5"
                 )[0]
                 cmd = f"flocs-run linc target --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/{rundir_final} --restart --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account lofarvlbi --runner toil --output-fullres-data --min-unflagged-fraction 0.05 --cal-solutions {cal_sol_path} {self.RUNDIR}/{field_name}/target/L{sas_id}/"
+                print(f"Launching {identifier} for {name}")
                 print(cmd)
                 with open(f"log_LINC_target_{field_name}.txt", "a") as f_out, open(
                     f"log_LINC_target_{field_name}_err.txt", "a"
@@ -463,22 +464,24 @@ class FlocsSlurmProcessor:
             console.print(f"= {finished} targets finished", style="green")
             console.print(f"= {error} targets failed", style="red")
 
-    def update_db_statuses(self):
+    def update_db_statuses(self, running_fields):
+        if not running_fields:
+            return
         print("== UPDATING DB STATUSES ==")
         console = Console(highlight=False)
-        futures = self.running_fields.keys()
+        futures = running_fields.keys()
         to_delete = set()
         for future in futures:
-            console.print(f"Field: {future['name']}")
-            console.print(f"= SAS ID: {future['sasid']}")
-            console.print(f"= Pipeline: {PIPELINE_NAMES[future['pipeline']]}")
-            field = self.running_fields[future]
+            field = running_fields[future]
+            console.print(f"[bold]Field: {field['name']}[/bold]")
+            console.print(f"SAS ID: {field['sasid']}")
+            console.print(f"Pipeline: {PIPELINE_NAMES[field['pipeline']]}")
             if future.cancelled():
-                console.print("= Status: [bold yellow]cancelled[/bold yellow]")
-                del self.running_fields[future]
+                console.print("Status: [bold yellow]cancelled[/bold yellow]")
+                del running_fields[future]
             elif future.done():
                 if future.exception(timeout=10):
-                    console.print("= Status: [bold red]failed[/bold red]")
+                    console.print("Status: [bold red]failed[/bold red]")
                     print(
                         f"Processing {field['identifier']} for {field['name']} failed."
                     )
@@ -489,34 +492,29 @@ class FlocsSlurmProcessor:
                             f"update {self.TABLE_NAME} set status_{field['identifier']}={PIPELINE_STATUS.error.value} where source_name=='{field['name']}'"
                         )
                 else:
-                    console.print("= Status: [bold green]finished[/bold green]")
                     result = future.result()
                     print(f"Result was {result}")
                     with sqlite3.connect(self.DATABASE) as db:
                         cursor = db.cursor()
                         if result:
+                            console.print("Status: [bold green]finished[/bold green]")
                             cursor.execute(
                                 f"update {self.TABLE_NAME} set status_{field['identifier']}={PIPELINE_STATUS.finished.value} where source_name=='{field['name']}'"
-                            )
-                            print(
-                                f"Processing {field['identifier']} for {field['name']} succeeded."
                             )
                             if field["identifier"] == "target":
                                 cursor.execute(
                                     f"update {self.TABLE_NAME} set status_delay={PIPELINE_STATUS.downloaded.value} where source_name=='{field['name']}'"
                                 )
                         else:
+                            console.print("Status: [bold red]failed[/bold red]")
                             cursor.execute(
                                 f"update {self.TABLE_NAME} set status_{field['identifier']}={PIPELINE_STATUS.error.value} where source_name=='{field['name']}'"
                             )
-                            print(
-                                f"Processing {field['identifier']} for {field['name']} failed."
-                            )
                 to_delete.add(future)
             else:
-                console.print("= Status: [bold cyan]running[/bold cyan]")
+                console.print("Status: [bold cyan]running[/bold cyan]\n")
         for f in to_delete:
-            self.running_fields.pop(f, None)
+            running_fields.pop(f, None)
         print("== UPDATING DB STATUSES FINISHED")
 
     def get_not_started(self, identifier: str):
@@ -535,8 +533,8 @@ class FlocsSlurmProcessor:
             ).fetchall()
         return restart
 
-    def is_processing(self, name):
-        return name in [v["name"] for f, v in self.running_fields.items()]
+    def is_processing(self, name, running_fields):
+        return name in [v["name"] for f, v in running_fields.items()]
 
     def set_status_processing(self, name, identifier, target):
         with sqlite3.connect(self.DATABASE) as db:
@@ -551,12 +549,12 @@ class FlocsSlurmProcessor:
         MAX_RUNNING = 3
         max_noqueue = 5
         noqueue = 0
+        lock = threading.RLock()
         with ProcessPoolExecutor(max_workers=MAX_RUNNING + 1) as tpe:
-            self.running_fields = {}
-            lock = threading.RLock()
+            running_fields = {}
 
             while True:
-                if len(self.running_fields) < 1:
+                if len(running_fields) < 1:
                     noqueue += 1
                 else:
                     noqueue = 0
@@ -566,13 +564,13 @@ class FlocsSlurmProcessor:
                         f"No new jobs added in queue for {max_noqueue * 60} s, quitting processing loop."
                     )
                     break
-                self.is_accepting_jobs = len(self.running_fields) < MAX_RUNNING
+                self.is_accepting_jobs = len(running_fields) < MAX_RUNNING
                 if allow_up_to >= PIPELINE.linc_calibrator:
                     restart1 = self.get_failed("calibrator1")
                     restart2 = self.get_failed("calibrator2")
                     if restart1:
                         for name, cal1, cal2, cal_final, target, _, _, _, _ in restart1:
-                            if not self.is_processing(name) and self.is_accepting_jobs:
+                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
                                 with lock:
                                     print(
                                         f"Re-starting LINC calibrator for calibrator 1 of field {name}"
@@ -580,7 +578,7 @@ class FlocsSlurmProcessor:
                                     future = tpe.submit(
                                         self.launch_calibrator, name, cal1, restart=True
                                     )
-                                    self.running_fields[future] = {
+                                    running_fields[future] = {
                                         "name": name,
                                         "pipeline": PIPELINE.linc_calibrator,
                                         "identifier": "calibrator1",
@@ -589,7 +587,7 @@ class FlocsSlurmProcessor:
                                 self.set_status_processing(name, "calibrator1", target)
                     if restart2:
                         for name, cal1, cal2, cal_final, target, _, _, _, _ in restart2:
-                            if not self.is_processing(name) and self.is_accepting_jobs:
+                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
                                 with lock:
                                     print(
                                         f"Re-starting LINC calibrator for calibrator 2 of field {name}"
@@ -597,7 +595,7 @@ class FlocsSlurmProcessor:
                                     future = tpe.submit(
                                         self.launch_calibrator, name, cal2, restart=True
                                     )
-                                    self.running_fields[future] = {
+                                    running_fields[future] = {
                                         "name": name,
                                         "pipeline": PIPELINE.linc_calibrator,
                                         "identifier": "calibrator2",
@@ -619,7 +617,7 @@ class FlocsSlurmProcessor:
                             _,
                             _,
                         ) in not_started1:
-                            if not self.is_processing(name) and self.is_accepting_jobs:
+                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
                                 with lock:
                                     print(
                                         f"Re-starting LINC calibrator for calibrator 1 of field {name}"
@@ -627,7 +625,7 @@ class FlocsSlurmProcessor:
                                     future = tpe.submit(
                                         self.launch_calibrator, name, cal1
                                     )
-                                    self.running_fields[future] = {
+                                    running_fields[future] = {
                                         "name": name,
                                         "pipeline": PIPELINE.linc_calibrator,
                                         "identifier": "calibrator1",
@@ -646,7 +644,7 @@ class FlocsSlurmProcessor:
                             _,
                             _,
                         ) in not_started2:
-                            if not self.is_processing(name) and self.is_accepting_jobs:
+                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
                                 with lock:
                                     print(
                                         f"Re-starting LINC calibrator for calibrator 2 of field {name}"
@@ -654,18 +652,19 @@ class FlocsSlurmProcessor:
                                     future = tpe.submit(
                                         self.launch_calibrator, name, cal2
                                     )
-                                    self.running_fields[future] = {
-                                        "name": name,
-                                        "pipeline": PIPELINE.linc_calibrator,
-                                        "identifier": "calibrator2",
-                                        "sasid": target,
-                                    }
+                                    with lock:
+                                        running_fields[future] = {
+                                            "name": name,
+                                            "pipeline": PIPELINE.linc_calibrator,
+                                            "identifier": "calibrator2",
+                                            "sasid": target,
+                                        }
                                 self.set_status_processing(name, "calibrator2", target)
                 if allow_up_to >= PIPELINE.linc_target:
                     restart = self.get_failed("target")
                     if restart:
                         for name, cal1, cal2, cal_final, target, _, _, _, _ in restart:
-                            if not self.is_processing(name) and self.is_accepting_jobs:
+                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
                                 print(f"Re-starting LINC target for field {name}")
                                 with lock:
                                     future = tpe.submit(
@@ -675,7 +674,7 @@ class FlocsSlurmProcessor:
                                         cal_final,
                                         restart=True,
                                     )
-                                    self.running_fields[future] = {
+                                    running_fields[future] = {
                                         "name": name,
                                         "pipeline": PIPELINE.linc_target,
                                         "sasid": target,
@@ -697,25 +696,24 @@ class FlocsSlurmProcessor:
                             _,
                             _,
                         ) in not_started:
-                            if not self.is_processing(name) and self.is_accepting_jobs:
+                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
                                 print(f"Starting LINC target for field {name}")
-                                with lock:
-                                    future = tpe.submit(
-                                        self.launch_target, name, target, cal_final
-                                    )
-                                    self.running_fields[future] = {
-                                        "name": name,
-                                        "pipeline": PIPELINE.linc_target,
-                                        "sasid": target,
-                                        "identifier": "target",
-                                    }
+                                future = tpe.submit(
+                                    self.launch_target, name, target, cal_final
+                                )
+                                running_fields[future] = {
+                                    "name": name,
+                                    "pipeline": PIPELINE.linc_target,
+                                    "sasid": target,
+                                    "identifier": "target",
+                                }
                                 self.set_status_processing(name, "target", target)
                                 print(f"Launched {name}")
                 if allow_up_to >= PIPELINE.vlbi_delay:
                     restart = self.get_failed("delay")
                     if restart:
                         for name, _, _, _, target, _, _, _, _ in restart:
-                            if not self.is_processing(name) and self.is_accepting_jobs:
+                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
                                 print(f"Re-starting VLBI delay for field {name}")
                                 with lock:
                                     future = tpe.submit(
@@ -724,7 +722,7 @@ class FlocsSlurmProcessor:
                                         target,
                                         restart=True,
                                     )
-                                    self.running_fields[future] = {
+                                    running_fields[future] = {
                                         "name": name,
                                         "pipeline": PIPELINE.vlbi_delay,
                                         "sasid": target,
@@ -746,13 +744,13 @@ class FlocsSlurmProcessor:
                             _,
                             _,
                         ) in not_started:
-                            if not self.is_processing(name) and self.is_accepting_jobs:
+                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
                                 print(f"Starting VLBI delay for field {name}")
                                 with lock:
                                     future = tpe.submit(
                                         self.launch_vlbi_delay, name, target
                                     )
-                                    self.running_fields[future] = {
+                                    running_fields[future] = {
                                         "name": name,
                                         "pipeline": PIPELINE.vlbi_delay,
                                         "sasid": target,
@@ -763,7 +761,7 @@ class FlocsSlurmProcessor:
                     else:
                         print("no new fields for VLBI delay")
                 with lock:
-                    self.update_db_statuses()
+                    self.update_db_statuses(running_fields)
                 time.sleep(60)
 
 
