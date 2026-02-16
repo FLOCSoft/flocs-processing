@@ -92,7 +92,7 @@ def create_database(
     table_name: Annotated[
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
-    pipelines: Annotated[Iterable[str], Parameter(help="")] = ["linc"],
+    pipelines: Annotated[list[str], Parameter(help="", consume_multiple=True)] = ["linc"],
 ):
     pipelines = list(map(str.lower, pipelines))
     dbstr = f"create table {table_name}(source_name text default NULL"
