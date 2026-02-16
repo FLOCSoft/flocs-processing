@@ -130,12 +130,15 @@ def process_from_database(
     slurm_queues: Annotated[
         list[str], Parameter(help="Slurm queues that jobs can be submitted to.")
     ],
+    slurm_account: Annotated[
+        str, Parameter(help="Slurm account to submit under.")
+    ],
     table_name: Annotated[
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
 ):
     fp = FlocsSlurmProcessor(
-        database=dbname, slurm_queues=slurm_queues, table_name=table_name, rundir=rundir
+        database=dbname, slurm_queues=slurm_queues, slurm_account=slurm_account, table_name=table_name, rundir=rundir
     )
     fp.start_processing_loop()
 
@@ -145,6 +148,7 @@ class FlocsSlurmProcessor:
         self,
         database: str,
         slurm_queues: list,
+        slurm_account: str,
         rundir: str,
         table_name: Annotated[
             str, Parameter(help="Database table to start processing in.")
@@ -152,13 +156,14 @@ class FlocsSlurmProcessor:
     ):
         self.DATABASE = database
         self.SLURM_QUEUES = ",".join(slurm_queues)
+        self.SLURM_ACCOUNT = slurm_account
         self.TABLE_NAME = table_name
         self.RUNDIR = rundir
 
     def launch_calibrator(self, field_name, sas_id, restart: bool = False):
         if not restart:
             try:
-                cmd = f"flocs-run linc calibrator --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/ --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 24:00:00 --slurm-account lofarvlbi --runner toil --save-raw-solutions {self.RUNDIR}/{field_name}/calibrator/L{sas_id}"
+                cmd = f"flocs-run linc calibrator --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/ --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 24:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --save-raw-solutions {self.RUNDIR}/{field_name}/calibrator/L{sas_id}"
                 print(cmd)
                 with open(
                     f"log_LINC_calibrator_{field_name}_{sas_id}.txt", "a"
@@ -183,7 +188,7 @@ class FlocsSlurmProcessor:
             # Last directory touched for this source
             rundir_final = rundirs_sorted_filtered[-1].parts[-1]
             try:
-                cmd = f"flocs-run linc calibrator --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/{rundir_final} --outdir {self.RUNDIR}/{field_name} --restart --slurm-queue {self.SLURM_QUEUES} --slurm-time 24:00:00 --slurm-account lofarvlbi --runner toil --save-raw-solutions {self.RUNDIR}/{field_name}/calibrator/L{sas_id}"
+                cmd = f"flocs-run linc calibrator --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/{rundir_final} --outdir {self.RUNDIR}/{field_name} --restart --slurm-queue {self.SLURM_QUEUES} --slurm-time 24:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --save-raw-solutions {self.RUNDIR}/{field_name}/calibrator/L{sas_id}"
                 print(cmd)
                 with open(
                     f"log_LINC_calibrator_{field_name}_{sas_id}.txt", "a"
@@ -207,7 +212,7 @@ class FlocsSlurmProcessor:
                 cal_sol_path = glob.glob(
                     f"{self.RUNDIR}/{field_name}/LINC_calibrator_L{sas_id_cal}*/results_LINC_calibrator/cal_solutions.h5"
                 )[0]
-                cmd = f"flocs-run linc target --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/ --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account lofarvlbi --runner toil --output-fullres-data --min-unflagged-fraction 0.05 --cal-solutions {cal_sol_path} {self.RUNDIR}/{field_name}/target/L{sas_id}/"
+                cmd = f"flocs-run linc target --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/ --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --output-fullres-data --min-unflagged-fraction 0.05 --cal-solutions {cal_sol_path} {self.RUNDIR}/{field_name}/target/L{sas_id}/"
                 print(cmd)
                 with open(
                     f"log_LINC_target_{field_name}_{sas_id}.txt", "w"
@@ -235,7 +240,7 @@ class FlocsSlurmProcessor:
                 cal_sol_path = glob.glob(
                     f"{self.RUNDIR}/{field_name}/LINC_calibrator_L{sas_id_cal}*/results_LINC_calibrator/cal_solutions.h5"
                 )[0]
-                cmd = f"flocs-run linc target --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/{rundir_final} --restart --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account lofarvlbi --runner toil --output-fullres-data --min-unflagged-fraction 0.05 --cal-solutions {cal_sol_path} {self.RUNDIR}/{field_name}/target/L{sas_id}/"
+                cmd = f"flocs-run linc target --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/{rundir_final} --restart --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --output-fullres-data --min-unflagged-fraction 0.05 --cal-solutions {cal_sol_path} {self.RUNDIR}/{field_name}/target/L{sas_id}/"
                 print(cmd)
                 with open(f"log_LINC_target_{field_name}_{sas_id}.txt", "a") as f_out, open(
                     f"log_LINC_target_{field_name}_{sas_id}_err.txt", "a"
@@ -285,7 +290,7 @@ class FlocsSlurmProcessor:
                 print(f"Failed to find delay_calibrators.csv for {field_name}")
                 return False
             try:
-                cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --scheduler slurm --rundir {rundirs/'rundir'} --outdir {rundirs} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account lofarvlbi --runner toil --delay-calibrator {delay_csv} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target'/'results'}"
+                cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --scheduler slurm --rundir {rundirs/'rundir'} --outdir {rundirs} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --delay-calibrator {delay_csv} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target'/'results'}"
                 print(cmd)
                 os.chdir(rundirs)
                 with open(
@@ -324,7 +329,7 @@ class FlocsSlurmProcessor:
 
             delay_csv = rundirs / "delay_calibrators.csv"
             try:
-                cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --scheduler slurm --rundir {vlbi_dir} --restart --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account lofarvlbi --runner toil --delay-calibrator {self.RUNDIR}/{field_name}/{delay_csv} --ms-suffix dp3concat {linc_target_dir}"
+                cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --scheduler slurm --rundir {vlbi_dir} --restart --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --delay-calibrator {self.RUNDIR}/{field_name}/{delay_csv} --ms-suffix dp3concat {linc_target_dir}"
                 print(cmd)
                 os.chdir(rundirs)
                 with open(
@@ -371,7 +376,7 @@ class FlocsSlurmProcessor:
         delay_solset = glob.glob(vlbi_dir / "results_VLBI_delay-calibration" / "*.h5")
         if not restart:
             try:
-                cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --scheduler slurm --rundir {rundirs/'rundir'} --outdir {rundirs} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account lofarvlbi --runner toil --delay-solset {delay_solset} --source-catalogue {target_csv} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target'/'results'}"
+                cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --scheduler slurm --rundir {rundirs/'rundir'} --outdir {rundirs} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --delay-solset {delay_solset} --source-catalogue {target_csv} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target'/'results'}"
                 print(cmd)
                 os.chdir(rundirs)
                 with open(
@@ -399,7 +404,7 @@ class FlocsSlurmProcessor:
             ]
             vlbi_dd_dir = vlbi_rundirs_sorted_filtered[-1]
             try:
-                cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --scheduler slurm --rundir {rundirs/'rundir'} --restart --outdir {rundirs} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account lofarvlbi --runner toil --delay-solset {delay_solset} --source-catalogue {target_csv} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target'/'results'}"
+                cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --scheduler slurm --rundir {rundirs/'rundir'} --restart --outdir {rundirs} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --delay-solset {delay_solset} --source-catalogue {target_csv} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target'/'results'}"
                 print(cmd)
                 os.chdir(rundirs)
                 with open(
