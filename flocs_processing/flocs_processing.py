@@ -231,7 +231,6 @@ class FlocsSlurmProcessor:
                     f"{self.RUNDIR}/{field_name}/LINC_calibrator_L{sas_id_cal}*/results_LINC_calibrator/cal_solutions.h5"
                 )[0]
                 cmd = f"flocs-run linc target --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/{rundir_final} --restart --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account lofarvlbi --runner toil --output-fullres-data --min-unflagged-fraction 0.05 --cal-solutions {cal_sol_path} {self.RUNDIR}/{field_name}/target/L{sas_id}/"
-                print(f"Launching {identifier} for {name}")
                 print(cmd)
                 with open(f"log_LINC_target_{field_name}.txt", "a") as f_out, open(
                     f"log_LINC_target_{field_name}_err.txt", "a"
