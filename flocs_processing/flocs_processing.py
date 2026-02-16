@@ -99,7 +99,12 @@ def create_database(
 
     if "linc" in pipelines:
         dbstr += ", sas_id_calibrator1 text default NULL, sas_id_calibrator2 text default NULL, sas_id_calibrator_final text default NULL, sas_id_target text primary key default NULL, status_calibrator1 smallint default 0, status_calibrator2 smallint default 0, status_target smallint default 0"
-    if "vlbi-delay" in pipelines:
+    if "ddf-pipeline" in pipelines:
+        dbstr += ", status_ddf smallint default 0"
+    if "vlbi-delay-widefield" in pipelines:
+        dbstr += ", status_ddf smallint default 0"
+        dbstr += ", status_delay smallint default 0"
+    if "vlbi-delay-single-target" in pipelines:
         dbstr += ", status_delay smallint default 0"
     dbstr += ");"
 
