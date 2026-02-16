@@ -232,8 +232,8 @@ class FlocsSlurmProcessor:
                 )[0]
                 cmd = f"flocs-run linc target --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/{rundir_final} --restart --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account lofarvlbi --runner toil --output-fullres-data --min-unflagged-fraction 0.05 --cal-solutions {cal_sol_path} {self.RUNDIR}/{field_name}/target/L{sas_id}/"
                 print(cmd)
-                with open(f"log_LINC_target_{field_name}.txt", "a") as f_out, open(
-                    f"log_LINC_target_{field_name}_err.txt", "a"
+                with open(f"log_LINC_target_{field_name}_{sas_id}.txt", "a") as f_out, open(
+                    f"log_LINC_target_{field_name}_{sas_id}_err.txt", "a"
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
