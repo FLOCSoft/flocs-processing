@@ -483,7 +483,7 @@ class FlocsSlurmProcessor:
         for future in futures:
             field = running_fields[future]
             console.print(f"[bold]Field: {field['name']}[/bold]")
-            console.print(f"SAS ID: {field['sasid']}")
+            console.print(f"Target SAS ID: {field['sasid']}")
             console.print(f"Pipeline: {PIPELINE_NAMES[field['pipeline']]}")
             if future.cancelled():
                 console.print("Status: [bold yellow]cancelled[/bold yellow]")
@@ -523,7 +523,8 @@ class FlocsSlurmProcessor:
             else:
                 console.print("Status: [bold cyan]running[/bold cyan]\n")
         for f in to_delete:
-            running_fields.pop(f, None)
+            print(f"Deleting future for {f['name']}")
+            del running_fields[f]
         print("== UPDATING DB STATUSES FINISHED")
 
     def get_not_started(self, identifier: str):
