@@ -92,7 +92,9 @@ def create_database(
     table_name: Annotated[
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
-    pipelines: Annotated[list[str], Parameter(help="", consume_multiple=True)] = ["linc"],
+    pipelines: Annotated[list[str], Parameter(help="", consume_multiple=True)] = [
+        "linc"
+    ],
 ):
     pipelines = list(map(str.lower, pipelines))
     dbstr = f"create table {table_name}(source_name text default NULL"
@@ -117,6 +119,44 @@ def create_database(
 
 
 @app.command()
+def add_field(
+    field_name: Annotated[str, Parameter(help="Name of the source/field to add.")],
+    sas_id_calibrators: Annotated[
+        list[str],
+        Parameter(help="SAS IDs of the calibrators to add.", consume_multiple=True),
+    ],
+    sas_id_target: Annotated[
+        str,
+        Parameter(help="SAS ID of the target to add.", consume_multiple=True),
+    ],
+    dbname: Annotated[
+        str, Parameter(help="Sqlite3 database from which processing will be done.")
+    ],
+    table_name: Annotated[
+        str, Parameter(help="Database table that will be processed.")
+    ] = "processing_flocs",
+):
+    dbstr = f"insert into {table_name} (source_name"
+    if len(sas_id_calibrators) == 1:
+        dbstr += ", sas_id_calibrator1"
+    if len(sas_id_calibrators) == 2:
+        dbstr += ", sas_id_calibrator1, sas_id_calibrator2"
+    dbstr += f", sas_id_target) values ('{field_name}', "
+    if len(sas_id_calibrators) == 1:
+        dbstr += f"{sas_id_calibrators[0]}"
+    if len(sas_id_calibrators) == 2:
+        dbstr += f"{sas_id_calibrators[0]}, {sas_id_calibrators[1]}, "
+    dbstr += f"{sas_id_target})"
+
+    cmd = ["sqlite3", dbname, dbstr]
+    print(f"Adding field {field_name} to {table_name} via: {" ".join(cmd)}")
+
+    return_code = subprocess.run(cmd)
+    if not return_code:
+        raise RuntimeError(f"Failed to update table {table_name} in database {dbname}.")
+
+
+@app.command()
 def process_from_database(
     dbname: Annotated[
         str, Parameter(help="Sqlite3 database from which processing will be done.")
@@ -130,15 +170,17 @@ def process_from_database(
     slurm_queues: Annotated[
         list[str], Parameter(help="Slurm queues that jobs can be submitted to.")
     ],
-    slurm_account: Annotated[
-        str, Parameter(help="Slurm account to submit under.")
-    ],
+    slurm_account: Annotated[str, Parameter(help="Slurm account to submit under.")],
     table_name: Annotated[
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
 ):
     fp = FlocsSlurmProcessor(
-        database=dbname, slurm_queues=slurm_queues, slurm_account=slurm_account, table_name=table_name, rundir=rundir
+        database=dbname,
+        slurm_queues=slurm_queues,
+        slurm_account=slurm_account,
+        table_name=table_name,
+        rundir=rundir,
     )
     fp.start_processing_loop()
 
@@ -242,7 +284,9 @@ class FlocsSlurmProcessor:
                 )[0]
                 cmd = f"flocs-run linc target --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/{rundir_final} --restart --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --output-fullres-data --min-unflagged-fraction 0.05 --cal-solutions {cal_sol_path} {self.RUNDIR}/{field_name}/target/L{sas_id}/"
                 print(cmd)
-                with open(f"log_LINC_target_{field_name}_{sas_id}.txt", "a") as f_out, open(
+                with open(
+                    f"log_LINC_target_{field_name}_{sas_id}.txt", "a"
+                ) as f_out, open(
                     f"log_LINC_target_{field_name}_{sas_id}_err.txt", "a"
                 ) as f_err:
                     proc = subprocess.run(
@@ -580,7 +624,10 @@ class FlocsSlurmProcessor:
                     restart2 = self.get_failed("calibrator2")
                     if restart1:
                         for name, cal1, cal2, cal_final, target, _, _, _, _ in restart1:
-                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
+                            if (
+                                not self.is_processing(name, running_fields)
+                                and self.is_accepting_jobs
+                            ):
                                 with lock:
                                     print(
                                         f"Re-starting LINC calibrator for calibrator 1 of field {name}"
@@ -597,7 +644,10 @@ class FlocsSlurmProcessor:
                                 self.set_status_processing(name, "calibrator1", target)
                     if restart2:
                         for name, cal1, cal2, cal_final, target, _, _, _, _ in restart2:
-                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
+                            if (
+                                not self.is_processing(name, running_fields)
+                                and self.is_accepting_jobs
+                            ):
                                 with lock:
                                     print(
                                         f"Re-starting LINC calibrator for calibrator 2 of field {name}"
@@ -627,7 +677,10 @@ class FlocsSlurmProcessor:
                             _,
                             _,
                         ) in not_started1:
-                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
+                            if (
+                                not self.is_processing(name, running_fields)
+                                and self.is_accepting_jobs
+                            ):
                                 with lock:
                                     print(
                                         f"Re-starting LINC calibrator for calibrator 1 of field {name}"
@@ -654,7 +707,10 @@ class FlocsSlurmProcessor:
                             _,
                             _,
                         ) in not_started2:
-                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
+                            if (
+                                not self.is_processing(name, running_fields)
+                                and self.is_accepting_jobs
+                            ):
                                 with lock:
                                     print(
                                         f"Re-starting LINC calibrator for calibrator 2 of field {name}"
@@ -674,7 +730,10 @@ class FlocsSlurmProcessor:
                     restart = self.get_failed("target")
                     if restart:
                         for name, cal1, cal2, cal_final, target, _, _, _, _ in restart:
-                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
+                            if (
+                                not self.is_processing(name, running_fields)
+                                and self.is_accepting_jobs
+                            ):
                                 print(f"Re-starting LINC target for field {name}")
                                 with lock:
                                     future = tpe.submit(
@@ -706,7 +765,10 @@ class FlocsSlurmProcessor:
                             _,
                             _,
                         ) in not_started:
-                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
+                            if (
+                                not self.is_processing(name, running_fields)
+                                and self.is_accepting_jobs
+                            ):
                                 print(f"Starting LINC target for field {name}")
                                 future = tpe.submit(
                                     self.launch_target, name, target, cal_final
@@ -723,7 +785,10 @@ class FlocsSlurmProcessor:
                     restart = self.get_failed("delay")
                     if restart:
                         for name, _, _, _, target, _, _, _, _ in restart:
-                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
+                            if (
+                                not self.is_processing(name, running_fields)
+                                and self.is_accepting_jobs
+                            ):
                                 print(f"Re-starting VLBI delay for field {name}")
                                 with lock:
                                     future = tpe.submit(
@@ -754,7 +819,10 @@ class FlocsSlurmProcessor:
                             _,
                             _,
                         ) in not_started:
-                            if not self.is_processing(name, running_fields) and self.is_accepting_jobs:
+                            if (
+                                not self.is_processing(name, running_fields)
+                                and self.is_accepting_jobs
+                            ):
                                 print(f"Starting VLBI delay for field {name}")
                                 with lock:
                                     future = tpe.submit(
