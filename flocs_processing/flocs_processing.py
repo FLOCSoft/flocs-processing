@@ -567,7 +567,7 @@ class FlocsSlurmProcessor:
             else:
                 console.print("Status: [bold cyan]running[/bold cyan]\n")
         for f in to_delete:
-            print(f"Deleting future for {f['name']}")
+            print(f"Deleting future for {field['name']}")
             del running_fields[f]
         print("== UPDATING DB STATUSES FINISHED")
 
