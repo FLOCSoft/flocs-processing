@@ -399,86 +399,6 @@ class FlocsSlurmProcessor:
                 print("something went wrong")
         return False
 
-    def launch_vlbi_ddcal(self, field_name, sas_id, restart: bool = False):
-        rundirs = pathlib.Path(f"{self.RUNDIR}/{field_name}/")
-        rundirs_sorted = sorted(rundirs.iterdir(), key=os.path.getctime)
-        rundirs_sorted_filtered = [
-            d
-            for d in rundirs_sorted
-            if ((sas_id in d.parts[-1]) and ("arget" in d.parts[-1]))
-        ]
-        # Last LINC target reduction for this source
-        linc_target_dir = rundirs_sorted_filtered[-1]
-        first_ms = glob.glob(
-            f"{linc_target_dir}/results_LINC_target/results/*.dp3concat"
-        )[0]
-
-        vlbi_rundirs = pathlib.Path(f"{self.RUNDIR}/{field_name}/rundir")
-        vlbi_rundirs_sorted = sorted(vlbi_rundirs.iterdir(), key=os.path.getctime)
-        vlbi_rundirs_sorted_filtered = [
-            d for d in vlbi_rundirs_sorted if ("delay" in d.parts[-1])
-        ]
-        vlbi_dir = vlbi_rundirs_sorted_filtered[-1]
-
-        target_csv = rundirs / "target.csv"
-        if not os.path.isfile(target_csv):
-            print(f"Failed to find target.csv for {field_name}")
-            return False
-        delay_solset = glob.glob(vlbi_dir / "results_VLBI_delay-calibration" / "*.h5")
-        if not restart:
-            try:
-                cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --scheduler slurm --rundir {rundirs/'rundir'} --outdir {rundirs} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --delay-solset {delay_solset} --source-catalogue {target_csv} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target'/'results'}"
-                print(cmd)
-                os.chdir(rundirs)
-                with open(
-                    f"{field_name}/log_VLBI_dd-calibration_{field_name}_{sas_id}.txt",
-                    "w",
-                ) as f_out, open(
-                    f"{field_name}/log_VLBI_dd-calibration_{field_name}_{sas_id}_err.txt",
-                    "w",
-                ) as f_err:
-                    proc = subprocess.run(
-                        cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                    )
-                    if not proc.returncode:
-                        return True
-                    else:
-                        return False
-            except subprocess.CalledProcessError:
-                print("something went wrong")
-                return False
-        else:
-            vlbi_dd_rundirs = pathlib.Path(f"{self.RUNDIR}/{field_name}/rundir")
-            vlbi_dd_rundirs_sorted = sorted(
-                vlbi_rundirs.iterdir(), key=os.path.getctime
-            )
-            vlbi_dd_rundirs_sorted_filtered = [
-                d for d in vlbi_rundirs_sorted if ("dd-calibration" in d.parts[-1])
-            ]
-            vlbi_dd_dir = vlbi_rundirs_sorted_filtered[-1]
-            try:
-                cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --scheduler slurm --rundir {rundirs/'rundir'} --restart --outdir {rundirs} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --delay-solset {delay_solset} --source-catalogue {target_csv} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target'/'results'}"
-                print(cmd)
-                os.chdir(rundirs)
-                with open(
-                    f"{field_name}/log_VLBI_dd-calibration_{field_name}_{sas_id}.txt",
-                    "a",
-                ) as f_out, open(
-                    f"{field_name}/log_VLBI_dd-calibration_{field_name}_{sas_id}_err.txt",
-                    "a",
-                ) as f_err:
-                    proc = subprocess.run(
-                        cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                    )
-                    if not proc.returncode:
-                        return True
-                    else:
-                        return False
-            except subprocess.CalledProcessError:
-                print("something went wrong")
-                return False
-        return False
-
     def summarise_status(self):
         console = Console(highlight=False)
         console.print(f"General statistics for {self.DATABASE}", style="bold")
@@ -747,19 +667,18 @@ class FlocsSlurmProcessor:
                     and self.is_accepting_jobs
                 ):
                     print(f"Re-starting VLBI delay for field {name}")
-                    with lock:
-                        future = tpe.submit(
-                            self.launch_vlbi_delay,
-                            name,
-                            target,
-                            restart=True,
-                        )
-                        running_fields[future] = {
-                            "name": name,
-                            "pipeline": PIPELINE.vlbi_delay,
-                            "sasid": target,
-                            "identifier": "delay",
-                        }
+                    future = tpe.submit(
+                        self.launch_vlbi_delay,
+                        name,
+                        target,
+                        restart=True,
+                    )
+                    running_fields[future] = {
+                        "name": name,
+                        "pipeline": PIPELINE.vlbi_delay,
+                        "sasid": target,
+                        "identifier": "delay",
+                    }
                     self.set_status_processing(name, "delay", target)
                     print(f"Launched {name}")
 
