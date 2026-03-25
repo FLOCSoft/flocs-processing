@@ -3,7 +3,7 @@ from concurrent.futures import ProcessPoolExecutor
 from cyclopts import Parameter
 from enum import Enum
 from rich.console import Console
-from typing import Annotated, Iterable
+from typing import Annotated
 import cyclopts
 import functools
 import glob
@@ -210,7 +210,8 @@ class FlocsSlurmProcessor:
                 with open(
                     f"{field_name}/log_LINC_calibrator_{field_name}_{sas_id}.txt", "a"
                 ) as f_out, open(
-                    f"{field_name}/log_LINC_calibrator_{field_name}_{sas_id}_err.txt", "a"
+                    f"{field_name}/log_LINC_calibrator_{field_name}_{sas_id}_err.txt",
+                    "a",
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -235,7 +236,8 @@ class FlocsSlurmProcessor:
                 with open(
                     f"{field_name}/log_LINC_calibrator_{field_name}_{sas_id}.txt", "a"
                 ) as f_out, open(
-                    f"{field_name}/log_LINC_calibrator_{field_name}_{sas_id}_err.txt", "a"
+                    f"{field_name}/log_LINC_calibrator_{field_name}_{sas_id}_err.txt",
+                    "a",
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -318,7 +320,8 @@ class FlocsSlurmProcessor:
             )[0]
 
             with open(
-                f"{field_name}/log_VLBI_delay-calibration_plot_field_{field_name}_{sas_id}.txt", "w"
+                f"{field_name}/log_VLBI_delay-calibration_plot_field_{field_name}_{sas_id}.txt",
+                "w",
             ) as f_out, open(
                 f"{field_name}/log_VLBI_delay-calibration_plot_field_{field_name}_{sas_id}_err.txt",
                 "w",
@@ -338,9 +341,11 @@ class FlocsSlurmProcessor:
                 print(cmd)
                 os.chdir(rundirs)
                 with open(
-                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}.txt", "w"
+                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}.txt",
+                    "w",
                 ) as f_out, open(
-                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}_err.txt", "w"
+                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}_err.txt",
+                    "w",
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -377,9 +382,11 @@ class FlocsSlurmProcessor:
                 print(cmd)
                 os.chdir(rundirs)
                 with open(
-                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}.txt", "w"
+                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}.txt",
+                    "w",
                 ) as f_out, open(
-                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}_err.txt", "w"
+                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}_err.txt",
+                    "w",
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -390,82 +397,6 @@ class FlocsSlurmProcessor:
                         return False
             except subprocess.CalledProcessError:
                 print("something went wrong")
-        return False
-
-    def launch_vlbi_ddcal(self, field_name, sas_id, restart: bool = False):
-        rundirs = pathlib.Path(f"{self.RUNDIR}/{field_name}/")
-        rundirs_sorted = sorted(rundirs.iterdir(), key=os.path.getctime)
-        rundirs_sorted_filtered = [
-            d
-            for d in rundirs_sorted
-            if ((sas_id in d.parts[-1]) and ("arget" in d.parts[-1]))
-        ]
-        # Last LINC target reduction for this source
-        linc_target_dir = rundirs_sorted_filtered[-1]
-        first_ms = glob.glob(
-            f"{linc_target_dir}/results_LINC_target/results/*.dp3concat"
-        )[0]
-
-        vlbi_rundirs = pathlib.Path(f"{self.RUNDIR}/{field_name}/rundir")
-        vlbi_rundirs_sorted = sorted(vlbi_rundirs.iterdir(), key=os.path.getctime)
-        vlbi_rundirs_sorted_filtered = [
-            d for d in vlbi_rundirs_sorted if ("delay" in d.parts[-1])
-        ]
-        vlbi_dir = vlbi_rundirs_sorted_filtered[-1]
-
-        target_csv = rundirs / "target.csv"
-        if not os.path.isfile(target_csv):
-            print(f"Failed to find target.csv for {field_name}")
-            return False
-        delay_solset = glob.glob(vlbi_dir / "results_VLBI_delay-calibration" / "*.h5")
-        if not restart:
-            try:
-                cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --scheduler slurm --rundir {rundirs/'rundir'} --outdir {rundirs} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --delay-solset {delay_solset} --source-catalogue {target_csv} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target'/'results'}"
-                print(cmd)
-                os.chdir(rundirs)
-                with open(
-                    f"{field_name}/log_VLBI_dd-calibration_{field_name}_{sas_id}.txt", "w"
-                ) as f_out, open(
-                    f"{field_name}/log_VLBI_dd-calibration_{field_name}_{sas_id}_err.txt", "w"
-                ) as f_err:
-                    proc = subprocess.run(
-                        cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                    )
-                    if not proc.returncode:
-                        return True
-                    else:
-                        return False
-            except subprocess.CalledProcessError:
-                print("something went wrong")
-                return False
-        else:
-            vlbi_dd_rundirs = pathlib.Path(f"{self.RUNDIR}/{field_name}/rundir")
-            vlbi_dd_rundirs_sorted = sorted(
-                vlbi_rundirs.iterdir(), key=os.path.getctime
-            )
-            vlbi_dd_rundirs_sorted_filtered = [
-                d for d in vlbi_rundirs_sorted if ("dd-calibration" in d.parts[-1])
-            ]
-            vlbi_dd_dir = vlbi_rundirs_sorted_filtered[-1]
-            try:
-                cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --scheduler slurm --rundir {rundirs/'rundir'} --restart --outdir {rundirs} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --delay-solset {delay_solset} --source-catalogue {target_csv} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target'/'results'}"
-                print(cmd)
-                os.chdir(rundirs)
-                with open(
-                    f"{field_name}/log_VLBI_dd-calibration_{field_name}_{sas_id}.txt", "a"
-                ) as f_out, open(
-                    f"{field_name}/log_VLBI_dd-calibration_{field_name}_{sas_id}_err.txt", "a"
-                ) as f_err:
-                    proc = subprocess.run(
-                        cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                    )
-                    if not proc.returncode:
-                        return True
-                    else:
-                        return False
-            except subprocess.CalledProcessError:
-                print("something went wrong")
-                return False
         return False
 
     def summarise_status(self):
@@ -572,18 +503,26 @@ class FlocsSlurmProcessor:
         print("== UPDATING DB STATUSES FINISHED")
 
     def get_not_started(self, identifier: str):
-        with sqlite3.connect(self.DATABASE) as db:
-            cursor = db.cursor()
-            not_started = cursor.execute(
-                f"select * from {self.TABLE_NAME} where status_{identifier}=={PIPELINE_STATUS.downloaded.value}"
-            ).fetchall()
+        not_started = self.get_db_columns(identifier, PIPELINE_STATUS.downloaded)
         return not_started
 
     def get_failed(self, identifier: str):
+        restart = self.get_db_columns(identifier, PIPELINE_STATUS.error)
+        return restart
+
+    def get_db_columns(self, identifier: str, status: PIPELINE_STATUS):
         with sqlite3.connect(self.DATABASE) as db:
             cursor = db.cursor()
+            if "calibrator" in identifier:
+                columns = "field_name,sas_id_calibrator1,sas_id_calibrator2,sas_id_calibrator_final,sas_id_target"
+            if "target" in identifier:
+                columns = "field_name,sas_id_calibrator_final,sas_id_target"
+            if "delay" in identifier:
+                columns = "field_name,sas_id_target"
+            else:
+                columns = "*"
             restart = cursor.execute(
-                f"select * from {self.TABLE_NAME} where status_{identifier}=={PIPELINE_STATUS.error.value}"
+                f"select {columns} from {self.TABLE_NAME} where status_{identifier}=={status.value}"
             ).fetchall()
         return restart
 
@@ -596,6 +535,170 @@ class FlocsSlurmProcessor:
             cursor.execute(
                 f"update {self.TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.processing.value} where source_name=='{name}' and sas_id_target=='{target}'"
             )
+
+    def check_fields_linc_calibrator(self, running_fields, tpe):
+        restart1 = self.get_failed("calibrator1")
+        restart2 = self.get_failed("calibrator2")
+        if restart1:
+            for name, cal1, cal2, cal_final, target in restart1:
+                if (
+                    not self.is_processing(name, running_fields)
+                    and self.is_accepting_jobs
+                ):
+                    print(
+                        f"Re-starting LINC calibrator for calibrator 1 of field {name}"
+                    )
+                    future = tpe.submit(
+                        self.launch_calibrator, name, cal1, restart=True
+                    )
+                    running_fields[future] = {
+                        "name": name,
+                        "pipeline": PIPELINE.linc_calibrator,
+                        "identifier": "calibrator1",
+                        "sasid": target,
+                    }
+                self.set_status_processing(name, "calibrator1", target)
+        if restart2:
+            for name, cal1, cal2, cal_final, target in restart2:
+                if (
+                    not self.is_processing(name, running_fields)
+                    and self.is_accepting_jobs
+                ):
+                    print(
+                        f"Re-starting LINC calibrator for calibrator 2 of field {name}"
+                    )
+                    future = tpe.submit(
+                        self.launch_calibrator, name, cal2, restart=True
+                    )
+                    running_fields[future] = {
+                        "name": name,
+                        "pipeline": PIPELINE.linc_calibrator,
+                        "identifier": "calibrator2",
+                        "sasid": target,
+                    }
+                self.set_status_processing(name, "calibrator2", target)
+
+        not_started1 = self.get_not_started("calibrator1")
+        not_started2 = self.get_not_started("calibrator2")
+        if not_started1:
+            for name, cal1, cal2, cal_final, target in not_started1:
+                if (
+                    not self.is_processing(name, running_fields)
+                    and self.is_accepting_jobs
+                ):
+                    print(
+                        f"Re-starting LINC calibrator for calibrator 1 of field {name}"
+                    )
+                    future = tpe.submit(self.launch_calibrator, name, cal1)
+                    running_fields[future] = {
+                        "name": name,
+                        "pipeline": PIPELINE.linc_calibrator,
+                        "identifier": "calibrator1",
+                        "sasid": target,
+                    }
+                self.set_status_processing(name, "calibrator1", target)
+        if not_started2:
+            for name, cal1, cal2, cal_final, target in not_started2:
+                if (
+                    not self.is_processing(name, running_fields)
+                    and self.is_accepting_jobs
+                ):
+                    print(
+                        f"Re-starting LINC calibrator for calibrator 2 of field {name}"
+                    )
+                    future = tpe.submit(self.launch_calibrator, name, cal2)
+                    running_fields[future] = {
+                        "name": name,
+                        "pipeline": PIPELINE.linc_calibrator,
+                        "identifier": "calibrator2",
+                        "sasid": target,
+                    }
+                self.set_status_processing(name, "calibrator2", target)
+
+    def check_fields_linc_target(self, running_fields, tpe):
+        restart = self.get_failed("target")
+        if restart:
+            for name, cal_final, target in restart:
+                if (
+                    not self.is_processing(name, running_fields)
+                    and self.is_accepting_jobs
+                ):
+                    print(f"Re-starting LINC target for field {name}")
+                    future = tpe.submit(
+                        self.launch_target,
+                        name,
+                        target,
+                        cal_final,
+                        restart=True,
+                    )
+                    running_fields[future] = {
+                        "name": name,
+                        "pipeline": PIPELINE.linc_target,
+                        "sasid": target,
+                        "identifier": "target",
+                    }
+                    self.set_status_processing(name, "target", target)
+                    print(f"Launched {name}")
+
+        not_started = self.get_not_started("target")
+        if not_started:
+            for name, cal_final, target in not_started:
+                if (
+                    not self.is_processing(name, running_fields)
+                    and self.is_accepting_jobs
+                ):
+                    print(f"Starting LINC target for field {name}")
+                    future = tpe.submit(self.launch_target, name, target, cal_final)
+                    running_fields[future] = {
+                        "name": name,
+                        "pipeline": PIPELINE.linc_target,
+                        "sasid": target,
+                        "identifier": "target",
+                    }
+                    self.set_status_processing(name, "target", target)
+                    print(f"Launched {name}")
+
+    def check_fields_vlbi_delay(self, running_fields, tpe):
+        restart = self.get_failed("delay")
+        if restart:
+            for name, target in restart:
+                if (
+                    not self.is_processing(name, running_fields)
+                    and self.is_accepting_jobs
+                ):
+                    print(f"Re-starting VLBI delay for field {name}")
+                    future = tpe.submit(
+                        self.launch_vlbi_delay,
+                        name,
+                        target,
+                        restart=True,
+                    )
+                    running_fields[future] = {
+                        "name": name,
+                        "pipeline": PIPELINE.vlbi_delay,
+                        "sasid": target,
+                        "identifier": "delay",
+                    }
+                    self.set_status_processing(name, "delay", target)
+                    print(f"Launched {name}")
+
+        not_started = self.get_not_started("delay")
+        if not_started:
+            for name, target in not_started:
+                if (
+                    not self.is_processing(name, running_fields)
+                    and self.is_accepting_jobs
+                ):
+                    print(f"Starting VLBI delay for field {name}")
+                    future = tpe.submit(self.launch_vlbi_delay, name, target)
+                    running_fields[future] = {
+                        "name": name,
+                        "pipeline": PIPELINE.vlbi_delay,
+                        "sasid": target,
+                        "identifier": "delay",
+                    }
+                    self.set_status_processing(name, "delay", target)
+                    print(f"Launched {name}")
 
     def start_processing_loop(self, allow_up_to=PIPELINE.linc_calibrator):
         print("Starting processing loop")
@@ -620,224 +723,14 @@ class FlocsSlurmProcessor:
                     break
                 self.is_accepting_jobs = len(running_fields) < MAX_RUNNING
                 if allow_up_to >= PIPELINE.linc_calibrator:
-                    restart1 = self.get_failed("calibrator1")
-                    restart2 = self.get_failed("calibrator2")
-                    if restart1:
-                        for name, cal1, cal2, cal_final, target, _, _, _, _ in restart1:
-                            if (
-                                not self.is_processing(name, running_fields)
-                                and self.is_accepting_jobs
-                            ):
-                                with lock:
-                                    print(
-                                        f"Re-starting LINC calibrator for calibrator 1 of field {name}"
-                                    )
-                                    future = tpe.submit(
-                                        self.launch_calibrator, name, cal1, restart=True
-                                    )
-                                    running_fields[future] = {
-                                        "name": name,
-                                        "pipeline": PIPELINE.linc_calibrator,
-                                        "identifier": "calibrator1",
-                                        "sasid": target,
-                                    }
-                                self.set_status_processing(name, "calibrator1", target)
-                    if restart2:
-                        for name, cal1, cal2, cal_final, target, _, _, _, _ in restart2:
-                            if (
-                                not self.is_processing(name, running_fields)
-                                and self.is_accepting_jobs
-                            ):
-                                with lock:
-                                    print(
-                                        f"Re-starting LINC calibrator for calibrator 2 of field {name}"
-                                    )
-                                    future = tpe.submit(
-                                        self.launch_calibrator, name, cal2, restart=True
-                                    )
-                                    running_fields[future] = {
-                                        "name": name,
-                                        "pipeline": PIPELINE.linc_calibrator,
-                                        "identifier": "calibrator2",
-                                        "sasid": target,
-                                    }
-                                self.set_status_processing(name, "calibrator2", target)
-
-                    not_started1 = self.get_not_started("calibrator1")
-                    not_started2 = self.get_not_started("calibrator2")
-                    if not_started1:
-                        for (
-                            name,
-                            cal1,
-                            cal2,
-                            cal_final,
-                            target,
-                            _,
-                            _,
-                            _,
-                            _,
-                        ) in not_started1:
-                            if (
-                                not self.is_processing(name, running_fields)
-                                and self.is_accepting_jobs
-                            ):
-                                with lock:
-                                    print(
-                                        f"Re-starting LINC calibrator for calibrator 1 of field {name}"
-                                    )
-                                    future = tpe.submit(
-                                        self.launch_calibrator, name, cal1
-                                    )
-                                    running_fields[future] = {
-                                        "name": name,
-                                        "pipeline": PIPELINE.linc_calibrator,
-                                        "identifier": "calibrator1",
-                                        "sasid": target,
-                                    }
-                                self.set_status_processing(name, "calibrator1", target)
-                    if not_started2:
-                        for (
-                            name,
-                            cal1,
-                            cal2,
-                            cal_final,
-                            target,
-                            _,
-                            _,
-                            _,
-                            _,
-                        ) in not_started2:
-                            if (
-                                not self.is_processing(name, running_fields)
-                                and self.is_accepting_jobs
-                            ):
-                                with lock:
-                                    print(
-                                        f"Re-starting LINC calibrator for calibrator 2 of field {name}"
-                                    )
-                                    future = tpe.submit(
-                                        self.launch_calibrator, name, cal2
-                                    )
-                                    with lock:
-                                        running_fields[future] = {
-                                            "name": name,
-                                            "pipeline": PIPELINE.linc_calibrator,
-                                            "identifier": "calibrator2",
-                                            "sasid": target,
-                                        }
-                                self.set_status_processing(name, "calibrator2", target)
+                    with lock:
+                        self.check_fields_linc_calibrator(running_fields, tpe)
                 if allow_up_to >= PIPELINE.linc_target:
-                    restart = self.get_failed("target")
-                    if restart:
-                        for name, cal1, cal2, cal_final, target, _, _, _, _ in restart:
-                            if (
-                                not self.is_processing(name, running_fields)
-                                and self.is_accepting_jobs
-                            ):
-                                print(f"Re-starting LINC target for field {name}")
-                                with lock:
-                                    future = tpe.submit(
-                                        self.launch_target,
-                                        name,
-                                        target,
-                                        cal_final,
-                                        restart=True,
-                                    )
-                                    running_fields[future] = {
-                                        "name": name,
-                                        "pipeline": PIPELINE.linc_target,
-                                        "sasid": target,
-                                        "identifier": "target",
-                                    }
-                                self.set_status_processing(name, "target", target)
-                                print(f"Launched {name}")
-
-                    not_started = self.get_not_started("target")
-                    if not_started:
-                        for (
-                            name,
-                            _,
-                            _,
-                            cal_final,
-                            target,
-                            _,
-                            _,
-                            _,
-                            _,
-                        ) in not_started:
-                            if (
-                                not self.is_processing(name, running_fields)
-                                and self.is_accepting_jobs
-                            ):
-                                print(f"Starting LINC target for field {name}")
-                                future = tpe.submit(
-                                    self.launch_target, name, target, cal_final
-                                )
-                                running_fields[future] = {
-                                    "name": name,
-                                    "pipeline": PIPELINE.linc_target,
-                                    "sasid": target,
-                                    "identifier": "target",
-                                }
-                                self.set_status_processing(name, "target", target)
-                                print(f"Launched {name}")
+                    with lock:
+                        self.check_fields_linc_target(running_fields, tpe)
                 if allow_up_to >= PIPELINE.vlbi_delay:
-                    restart = self.get_failed("delay")
-                    if restart:
-                        for name, _, _, _, target, _, _, _, _ in restart:
-                            if (
-                                not self.is_processing(name, running_fields)
-                                and self.is_accepting_jobs
-                            ):
-                                print(f"Re-starting VLBI delay for field {name}")
-                                with lock:
-                                    future = tpe.submit(
-                                        self.launch_vlbi_delay,
-                                        name,
-                                        target,
-                                        restart=True,
-                                    )
-                                    running_fields[future] = {
-                                        "name": name,
-                                        "pipeline": PIPELINE.vlbi_delay,
-                                        "sasid": target,
-                                        "identifier": "delay",
-                                    }
-                                self.set_status_processing(name, "delay", target)
-                                print(f"Launched {name}")
-
-                    not_started = self.get_not_started("delay")
-                    if not_started:
-                        for (
-                            name,
-                            _,
-                            _,
-                            _,
-                            target,
-                            _,
-                            _,
-                            _,
-                            _,
-                        ) in not_started:
-                            if (
-                                not self.is_processing(name, running_fields)
-                                and self.is_accepting_jobs
-                            ):
-                                print(f"Starting VLBI delay for field {name}")
-                                with lock:
-                                    future = tpe.submit(
-                                        self.launch_vlbi_delay, name, target
-                                    )
-                                    running_fields[future] = {
-                                        "name": name,
-                                        "pipeline": PIPELINE.vlbi_delay,
-                                        "sasid": target,
-                                        "identifier": "delay",
-                                    }
-                                self.set_status_processing(name, "delay", target)
-                                print(f"Launched {name}")
-                    else:
-                        print("no new fields for VLBI delay")
+                    with lock:
+                        self.check_fields_vlbi_delay(running_fields, tpe)
                 with lock:
                     self.update_db_statuses(running_fields)
                 time.sleep(60)
