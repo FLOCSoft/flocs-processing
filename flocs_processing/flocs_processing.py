@@ -3,7 +3,7 @@ from concurrent.futures import ProcessPoolExecutor
 from cyclopts import Parameter
 from enum import Enum
 from rich.console import Console
-from typing import Annotated, Iterable
+from typing import Annotated
 import cyclopts
 import functools
 import glob
