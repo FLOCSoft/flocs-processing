@@ -597,6 +597,8 @@ class FlocsSlurmProcessor:
                 columns = "field_name,sas_id_calibrator1,sas_id_calibrator2,sas_id_calibrator_final,sas_id_target"
             if "target" in identifier:
                 columns = "field_name,sas_id_calibrator_final,sas_id_target"
+            if "delay" in identifier:
+                columns = "field_name,sas_id_target"
             else:
                 columns = "*"
             restart = cursor.execute(
@@ -736,6 +738,49 @@ class FlocsSlurmProcessor:
                     self.set_status_processing(name, "target", target)
                     print(f"Launched {name}")
 
+    def check_fields_vlbi_delay(self, running_fields, tpe):
+        restart = self.get_failed("delay")
+        if restart:
+            for name, target in restart:
+                if (
+                    not self.is_processing(name, running_fields)
+                    and self.is_accepting_jobs
+                ):
+                    print(f"Re-starting VLBI delay for field {name}")
+                    with lock:
+                        future = tpe.submit(
+                            self.launch_vlbi_delay,
+                            name,
+                            target,
+                            restart=True,
+                        )
+                        running_fields[future] = {
+                            "name": name,
+                            "pipeline": PIPELINE.vlbi_delay,
+                            "sasid": target,
+                            "identifier": "delay",
+                        }
+                    self.set_status_processing(name, "delay", target)
+                    print(f"Launched {name}")
+
+        not_started = self.get_not_started("delay")
+        if not_started:
+            for name, target in not_started:
+                if (
+                    not self.is_processing(name, running_fields)
+                    and self.is_accepting_jobs
+                ):
+                    print(f"Starting VLBI delay for field {name}")
+                    future = tpe.submit(self.launch_vlbi_delay, name, target)
+                    running_fields[future] = {
+                        "name": name,
+                        "pipeline": PIPELINE.vlbi_delay,
+                        "sasid": target,
+                        "identifier": "delay",
+                    }
+                    self.set_status_processing(name, "delay", target)
+                    print(f"Launched {name}")
+
     def start_processing_loop(self, allow_up_to=PIPELINE.linc_calibrator):
         print("Starting processing loop")
         allow_up_to = PIPELINE.linc_target
@@ -765,62 +810,8 @@ class FlocsSlurmProcessor:
                     with lock:
                         self.check_fields_linc_target(running_fields, tpe)
                 if allow_up_to >= PIPELINE.vlbi_delay:
-                    restart = self.get_failed("delay")
-                    if restart:
-                        for name, _, _, _, target, _, _, _, _ in restart:
-                            if (
-                                not self.is_processing(name, running_fields)
-                                and self.is_accepting_jobs
-                            ):
-                                print(f"Re-starting VLBI delay for field {name}")
-                                with lock:
-                                    future = tpe.submit(
-                                        self.launch_vlbi_delay,
-                                        name,
-                                        target,
-                                        restart=True,
-                                    )
-                                    running_fields[future] = {
-                                        "name": name,
-                                        "pipeline": PIPELINE.vlbi_delay,
-                                        "sasid": target,
-                                        "identifier": "delay",
-                                    }
-                                self.set_status_processing(name, "delay", target)
-                                print(f"Launched {name}")
-
-                    not_started = self.get_not_started("delay")
-                    if not_started:
-                        for (
-                            name,
-                            _,
-                            _,
-                            _,
-                            target,
-                            _,
-                            _,
-                            _,
-                            _,
-                        ) in not_started:
-                            if (
-                                not self.is_processing(name, running_fields)
-                                and self.is_accepting_jobs
-                            ):
-                                print(f"Starting VLBI delay for field {name}")
-                                with lock:
-                                    future = tpe.submit(
-                                        self.launch_vlbi_delay, name, target
-                                    )
-                                    running_fields[future] = {
-                                        "name": name,
-                                        "pipeline": PIPELINE.vlbi_delay,
-                                        "sasid": target,
-                                        "identifier": "delay",
-                                    }
-                                self.set_status_processing(name, "delay", target)
-                                print(f"Launched {name}")
-                    else:
-                        print("no new fields for VLBI delay")
+                    with lock:
+                        self.check_fields_vlbi_delay(running_fields, tpe)
                 with lock:
                     self.update_db_statuses(running_fields)
                 time.sleep(60)
