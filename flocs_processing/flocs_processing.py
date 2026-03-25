@@ -208,9 +208,9 @@ class FlocsSlurmProcessor:
                 cmd = f"flocs-run linc calibrator --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/ --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 24:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --save-raw-solutions {self.RUNDIR}/{field_name}/calibrator/L{sas_id}"
                 print(cmd)
                 with open(
-                    f"log_LINC_calibrator_{field_name}_{sas_id}.txt", "a"
+                    f"{field_name}/log_LINC_calibrator_{field_name}_{sas_id}.txt", "a"
                 ) as f_out, open(
-                    f"log_LINC_calibrator_{field_name}_{sas_id}_err.txt", "a"
+                    f"{field_name}/log_LINC_calibrator_{field_name}_{sas_id}_err.txt", "a"
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -233,9 +233,9 @@ class FlocsSlurmProcessor:
                 cmd = f"flocs-run linc calibrator --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/{rundir_final} --outdir {self.RUNDIR}/{field_name} --restart --slurm-queue {self.SLURM_QUEUES} --slurm-time 24:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --save-raw-solutions {self.RUNDIR}/{field_name}/calibrator/L{sas_id}"
                 print(cmd)
                 with open(
-                    f"log_LINC_calibrator_{field_name}_{sas_id}.txt", "a"
+                    f"{field_name}/log_LINC_calibrator_{field_name}_{sas_id}.txt", "a"
                 ) as f_out, open(
-                    f"log_LINC_calibrator_{field_name}_{sas_id}_err.txt", "a"
+                    f"{field_name}/log_LINC_calibrator_{field_name}_{sas_id}_err.txt", "a"
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -257,9 +257,9 @@ class FlocsSlurmProcessor:
                 cmd = f"flocs-run linc target --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/ --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --output-fullres-data --min-unflagged-fraction 0.05 --cal-solutions {cal_sol_path} {self.RUNDIR}/{field_name}/target/L{sas_id}/"
                 print(cmd)
                 with open(
-                    f"log_LINC_target_{field_name}_{sas_id}.txt", "w"
+                    f"{field_name}/log_LINC_target_{field_name}_{sas_id}.txt", "w"
                 ) as f_out, open(
-                    f"log_LINC_target_{field_name}_{sas_id}_err.txt", "w"
+                    f"l{field_name}/og_LINC_target_{field_name}_{sas_id}_err.txt", "w"
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -285,9 +285,9 @@ class FlocsSlurmProcessor:
                 cmd = f"flocs-run linc target --record-toil-stats --scheduler slurm --rundir {self.RUNDIR}/{field_name}/rundir/{rundir_final} --restart --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --output-fullres-data --min-unflagged-fraction 0.05 --cal-solutions {cal_sol_path} {self.RUNDIR}/{field_name}/target/L{sas_id}/"
                 print(cmd)
                 with open(
-                    f"log_LINC_target_{field_name}_{sas_id}.txt", "a"
+                    f"{field_name}/log_LINC_target_{field_name}_{sas_id}.txt", "a"
                 ) as f_out, open(
-                    f"log_LINC_target_{field_name}_{sas_id}_err.txt", "a"
+                    f"{field_name}/log_LINC_target_{field_name}_{sas_id}_err.txt", "a"
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -318,9 +318,9 @@ class FlocsSlurmProcessor:
             )[0]
 
             with open(
-                f"log_VLBI_delay-calibration_plot_field_{field_name}_{sas_id}.txt", "w"
+                f"{field_name}/log_VLBI_delay-calibration_plot_field_{field_name}_{sas_id}.txt", "w"
             ) as f_out, open(
-                f"log_VLBI_delay-calibration_plot_field_{field_name}_{sas_id}_err.txt",
+                f"{field_name}/log_VLBI_delay-calibration_plot_field_{field_name}_{sas_id}_err.txt",
                 "w",
             ) as f_err:
                 cmd = f"lofar-vlbi-plot --output_dir {rundirs} --MS {first_ms} --continue_no_lotss"
@@ -338,9 +338,9 @@ class FlocsSlurmProcessor:
                 print(cmd)
                 os.chdir(rundirs)
                 with open(
-                    f"log_VLBI_delay-calibration_{field_name}_{sas_id}.txt", "w"
+                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}.txt", "w"
                 ) as f_out, open(
-                    f"log_VLBI_delay-calibration_{field_name}_{sas_id}_err.txt", "w"
+                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}_err.txt", "w"
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -377,9 +377,9 @@ class FlocsSlurmProcessor:
                 print(cmd)
                 os.chdir(rundirs)
                 with open(
-                    f"log_VLBI_delay-calibration_{field_name}_{sas_id}.txt", "w"
+                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}.txt", "w"
                 ) as f_out, open(
-                    f"log_VLBI_delay-calibration_{field_name}_{sas_id}_err.txt", "w"
+                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}_err.txt", "w"
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -424,9 +424,9 @@ class FlocsSlurmProcessor:
                 print(cmd)
                 os.chdir(rundirs)
                 with open(
-                    f"log_VLBI_dd-calibration_{field_name}_{sas_id}.txt", "w"
+                    f"{field_name}/log_VLBI_dd-calibration_{field_name}_{sas_id}.txt", "w"
                 ) as f_out, open(
-                    f"log_VLBI_dd-calibration_{field_name}_{sas_id}_err.txt", "w"
+                    f"{field_name}/log_VLBI_dd-calibration_{field_name}_{sas_id}_err.txt", "w"
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -452,9 +452,9 @@ class FlocsSlurmProcessor:
                 print(cmd)
                 os.chdir(rundirs)
                 with open(
-                    f"log_VLBI_dd-calibration_{field_name}_{sas_id}.txt", "a"
+                    f"{field_name}/log_VLBI_dd-calibration_{field_name}_{sas_id}.txt", "a"
                 ) as f_out, open(
-                    f"log_VLBI_dd-calibration_{field_name}_{sas_id}_err.txt", "a"
+                    f"{field_name}/log_VLBI_dd-calibration_{field_name}_{sas_id}_err.txt", "a"
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
