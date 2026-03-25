@@ -595,6 +595,8 @@ class FlocsSlurmProcessor:
             cursor = db.cursor()
             if "calibrator" in identifier:
                 columns = "field_name,sas_id_calibrator1,sas_id_calibrator2,sas_id_calibrator_final,sas_id_target"
+            if "target" in identifier:
+                columns = "field_name,sas_id_calibrator_final,sas_id_target"
             else:
                 columns = "*"
             restart = cursor.execute(
@@ -691,6 +693,49 @@ class FlocsSlurmProcessor:
                     }
                 self.set_status_processing(name, "calibrator2", target)
 
+    def check_fields_linc_target(self, running_fields, tpe):
+        restart = self.get_failed("target")
+        if restart:
+            for name, cal_final, target in restart:
+                if (
+                    not self.is_processing(name, running_fields)
+                    and self.is_accepting_jobs
+                ):
+                    print(f"Re-starting LINC target for field {name}")
+                    future = tpe.submit(
+                        self.launch_target,
+                        name,
+                        target,
+                        cal_final,
+                        restart=True,
+                    )
+                    running_fields[future] = {
+                        "name": name,
+                        "pipeline": PIPELINE.linc_target,
+                        "sasid": target,
+                        "identifier": "target",
+                    }
+                    self.set_status_processing(name, "target", target)
+                    print(f"Launched {name}")
+
+        not_started = self.get_not_started("target")
+        if not_started:
+            for name, cal_final, target in not_started:
+                if (
+                    not self.is_processing(name, running_fields)
+                    and self.is_accepting_jobs
+                ):
+                    print(f"Starting LINC target for field {name}")
+                    future = tpe.submit(self.launch_target, name, target, cal_final)
+                    running_fields[future] = {
+                        "name": name,
+                        "pipeline": PIPELINE.linc_target,
+                        "sasid": target,
+                        "identifier": "target",
+                    }
+                    self.set_status_processing(name, "target", target)
+                    print(f"Launched {name}")
+
     def start_processing_loop(self, allow_up_to=PIPELINE.linc_calibrator):
         print("Starting processing loop")
         allow_up_to = PIPELINE.linc_target
@@ -717,60 +762,8 @@ class FlocsSlurmProcessor:
                     with lock:
                         self.check_fields_linc_calibrator(running_fields, tpe)
                 if allow_up_to >= PIPELINE.linc_target:
-                    restart = self.get_failed("target")
-                    if restart:
-                        for name, cal1, cal2, cal_final, target, _, _, _, _ in restart:
-                            if (
-                                not self.is_processing(name, running_fields)
-                                and self.is_accepting_jobs
-                            ):
-                                print(f"Re-starting LINC target for field {name}")
-                                with lock:
-                                    future = tpe.submit(
-                                        self.launch_target,
-                                        name,
-                                        target,
-                                        cal_final,
-                                        restart=True,
-                                    )
-                                    running_fields[future] = {
-                                        "name": name,
-                                        "pipeline": PIPELINE.linc_target,
-                                        "sasid": target,
-                                        "identifier": "target",
-                                    }
-                                self.set_status_processing(name, "target", target)
-                                print(f"Launched {name}")
-
-                    not_started = self.get_not_started("target")
-                    if not_started:
-                        for (
-                            name,
-                            _,
-                            _,
-                            cal_final,
-                            target,
-                            _,
-                            _,
-                            _,
-                            _,
-                        ) in not_started:
-                            if (
-                                not self.is_processing(name, running_fields)
-                                and self.is_accepting_jobs
-                            ):
-                                print(f"Starting LINC target for field {name}")
-                                future = tpe.submit(
-                                    self.launch_target, name, target, cal_final
-                                )
-                                running_fields[future] = {
-                                    "name": name,
-                                    "pipeline": PIPELINE.linc_target,
-                                    "sasid": target,
-                                    "identifier": "target",
-                                }
-                                self.set_status_processing(name, "target", target)
-                                print(f"Launched {name}")
+                    with lock:
+                        self.check_fields_linc_target(running_fields, tpe)
                 if allow_up_to >= PIPELINE.vlbi_delay:
                     restart = self.get_failed("delay")
                     if restart:
