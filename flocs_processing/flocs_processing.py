@@ -261,7 +261,7 @@ class FlocsSlurmProcessor:
                 with open(
                     f"{field_name}/log_LINC_target_{field_name}_{sas_id}.txt", "w"
                 ) as f_out, open(
-                    f"l{field_name}/og_LINC_target_{field_name}_{sas_id}_err.txt", "w"
+                    f"{field_name}/log_LINC_target_{field_name}_{sas_id}_err.txt", "w"
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
