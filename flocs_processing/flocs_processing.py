@@ -514,11 +514,11 @@ class FlocsSlurmProcessor:
         with sqlite3.connect(self.DATABASE) as db:
             cursor = db.cursor()
             if "calibrator" in identifier:
-                columns = "field_name,sas_id_calibrator1,sas_id_calibrator2,sas_id_calibrator_final,sas_id_target"
-            if "target" in identifier:
-                columns = "field_name,sas_id_calibrator_final,sas_id_target"
-            if "delay" in identifier:
-                columns = "field_name,sas_id_target"
+                columns = "source_name,sas_id_calibrator1,sas_id_calibrator2,sas_id_calibrator_final,sas_id_target"
+            elif "target" in identifier:
+                columns = "source_name,sas_id_calibrator_final,sas_id_target"
+            elif "delay" in identifier:
+                columns = "source_name,sas_id_target"
             else:
                 columns = "*"
             restart = cursor.execute(
