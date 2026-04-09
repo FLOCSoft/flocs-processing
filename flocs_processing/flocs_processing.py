@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from astropy.table import Table
 from concurrent.futures import ProcessPoolExecutor
 from cyclopts import Parameter
 from enum import Enum
@@ -9,6 +10,7 @@ import functools
 import glob
 import os
 import pathlib
+import re
 import subprocess
 import sqlite3
 import threading
@@ -267,6 +269,9 @@ class FlocsSlurmProcessor:
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                     )
                     if not proc.returncode:
+                        pattern = re.compile(r"Workflow.* stopped. Success: False")
+                        if pattern.search(proc.stderr):
+                            return False
                         return True
                     else:
                         return False
@@ -320,13 +325,13 @@ class FlocsSlurmProcessor:
             )[0]
 
             with open(
-                f"{field_name}/log_VLBI_delay-calibration_plot_field_{field_name}_{sas_id}.txt",
+                f"{rundirs}/log_VLBI_delay-calibration_plot_field_{field_name}_{sas_id}.txt",
                 "w",
             ) as f_out, open(
-                f"{field_name}/log_VLBI_delay-calibration_plot_field_{field_name}_{sas_id}_err.txt",
+                f"{rundirs}/log_VLBI_delay-calibration_plot_field_{field_name}_{sas_id}_err.txt",
                 "w",
             ) as f_err:
-                cmd = f"lofar-vlbi-plot --output_dir {rundirs} --MS {first_ms} --continue_no_lotss"
+                cmd = f"lofar-vlbi-plot --output_dir {rundirs} --MS {first_ms} --continue_no_lotss --vlass"
                 proc = subprocess.run(
                     cmd, shell=True, text=True, stdout=subprocess.PIPE
                 )
@@ -336,21 +341,26 @@ class FlocsSlurmProcessor:
             if not os.path.isfile(delay_csv):
                 print(f"Failed to find delay_calibrators.csv for {field_name}")
                 return False
+            dc = Table.read(delay_csv)
+            model_image = rundirs / f"{dc[0]['Observation']}_vlass.fits"
             try:
-                cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --scheduler slurm --rundir {rundirs/'rundir'} --outdir {rundirs} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --delay-calibrator {delay_csv} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target'/'results'}"
+                cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --scheduler slurm --rundir {rundirs/'rundir'} --outdir {rundirs} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --delay-calibrator {delay_csv} --model-image {model_image} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target'/'results'}"
                 print(cmd)
                 os.chdir(rundirs)
                 with open(
-                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}.txt",
+                    f"{rundirs}/log_VLBI_delay-calibration_{field_name}_{sas_id}.txt",
                     "w",
                 ) as f_out, open(
-                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}_err.txt",
+                    f"{rundirs}/log_VLBI_delay-calibration_{field_name}_{sas_id}_err.txt",
                     "w",
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                     )
                     if not proc.returncode:
+                        pattern = re.compile(r"Workflow.* stopped. Success: False")
+                        if pattern.search(proc.stderr):
+                            return False
                         return True
                     else:
                         return False
@@ -366,7 +376,8 @@ class FlocsSlurmProcessor:
                 if ((sas_id in d.parts[-1]) and ("arget" in d.parts[-1]))
             ]
             # Last LINC target reduction for this source
-            linc_target_dir = rundirs_sorted_filtered[-1].parts[-1]
+            linc_target_dir = rundirs_sorted_filtered[-1]
+            print(f"{linc_target_dir=}")
 
             vlbi_rundirs = pathlib.Path(f"{self.RUNDIR}/{field_name}/rundir")
             vlbi_rundirs_sorted = sorted(vlbi_rundirs.iterdir(), key=os.path.getctime)
@@ -375,23 +386,27 @@ class FlocsSlurmProcessor:
                 d for d in vlbi_rundirs_sorted if ("delay" in d.parts[-1])
             ]
             vlbi_dir = vlbi_rundirs_sorted_filtered[-1]
+            print(f"{vlbi_dir=}")
 
             delay_csv = rundirs / "delay_calibrators.csv"
             try:
-                cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --scheduler slurm --rundir {vlbi_dir} --restart --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --delay-calibrator {self.RUNDIR}/{field_name}/{delay_csv} --ms-suffix dp3concat {linc_target_dir}"
+                cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --scheduler slurm --rundir {vlbi_dir} --restart --outdir {self.RUNDIR}/{field_name} --slurm-queue {self.SLURM_QUEUES} --slurm-time 48:00:00 --slurm-account {self.SLURM_ACCOUNT} --runner toil --delay-calibrator {delay_csv} --ms-suffix dp3concat {linc_target_dir/'results_LINC_target/results'}"
                 print(cmd)
                 os.chdir(rundirs)
                 with open(
-                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}.txt",
+                    f"{rundirs}/log_VLBI_delay-calibration_{field_name}_{sas_id}.txt",
                     "w",
                 ) as f_out, open(
-                    f"{field_name}/log_VLBI_delay-calibration_{field_name}_{sas_id}_err.txt",
+                    f"{rundirs}/log_VLBI_delay-calibration_{field_name}_{sas_id}_err.txt",
                     "w",
                 ) as f_err:
                     proc = subprocess.run(
                         cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                     )
                     if not proc.returncode:
+                        pattern = re.compile(r"Workflow.* stopped. Success: False")
+                        if pattern.search(proc.stderr):
+                            return False
                         return True
                     else:
                         return False
@@ -638,6 +653,7 @@ class FlocsSlurmProcessor:
                         "identifier": "target",
                     }
                     self.set_status_processing(name, "target", target)
+                    self.is_accepting_jobs = len(running_fields) < self.MAX_RUNNING
                     print(f"Launched {name}")
 
         not_started = self.get_not_started("target")
@@ -656,6 +672,7 @@ class FlocsSlurmProcessor:
                         "identifier": "target",
                     }
                     self.set_status_processing(name, "target", target)
+                    self.is_accepting_jobs = len(running_fields) < self.MAX_RUNNING
                     print(f"Launched {name}")
 
     def check_fields_vlbi_delay(self, running_fields, tpe):
@@ -702,12 +719,12 @@ class FlocsSlurmProcessor:
 
     def start_processing_loop(self, allow_up_to=PIPELINE.linc_calibrator):
         print("Starting processing loop")
-        allow_up_to = PIPELINE.linc_target
-        MAX_RUNNING = 3
+        allow_up_to = PIPELINE.vlbi_delay
+        self.MAX_RUNNING = 3
         max_noqueue = 5
         noqueue = 0
         lock = threading.RLock()
-        with ProcessPoolExecutor(max_workers=MAX_RUNNING + 1) as tpe:
+        with ProcessPoolExecutor(max_workers=self.MAX_RUNNING + 1) as tpe:
             running_fields = {}
 
             while True:
@@ -721,7 +738,7 @@ class FlocsSlurmProcessor:
                         f"No new jobs added in queue for {max_noqueue * 60} s, quitting processing loop."
                     )
                     break
-                self.is_accepting_jobs = len(running_fields) < MAX_RUNNING
+                self.is_accepting_jobs = len(running_fields) < self.MAX_RUNNING
                 if allow_up_to >= PIPELINE.linc_calibrator:
                     with lock:
                         self.check_fields_linc_calibrator(running_fields, tpe)
