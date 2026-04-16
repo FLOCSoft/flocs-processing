@@ -316,7 +316,7 @@ class FlocsSlurmProcessor:
             rundirs_sorted_filtered = [
                 d
                 for d in rundirs_sorted
-                if ((sas_id in d.parts[-1]) and ("arget" in d.parts[-1]))
+                if ((sas_id in d.parts[-1]) and (d.parts[-1].startswith(("LINC_target"))))
             ]
             # Last LINC target reduction for this source
             linc_target_dir = rundirs_sorted_filtered[-1]
@@ -373,7 +373,7 @@ class FlocsSlurmProcessor:
             rundirs_sorted_filtered = [
                 d
                 for d in rundirs_sorted
-                if ((sas_id in d.parts[-1]) and ("arget" in d.parts[-1]))
+                if ((sas_id in d.parts[-1]) and (d.parts[-1].startswith(("LINC_target"))))
             ]
             # Last LINC target reduction for this source
             linc_target_dir = rundirs_sorted_filtered[-1]
