@@ -1,0 +1,246 @@
+from enum import Enum
+import functools
+import os
+import pathlib
+import sqlite3
+import subprocess
+
+from airflow.exceptions import AirflowFailException, AirflowSkipException
+from airflow.sdk import dag, task
+from airflow.task.trigger_rule import TriggerRule
+
+# Need to replace this with a config file
+TABLE_NAME = ""
+DATABASE = ""
+SLURM_ACCOUNT = ""
+SLURM_QUEUE = ""
+DATA_DIR = ""
+
+
+@functools.total_ordering
+class PIPELINE_STATUS(Enum):
+    nothing = 0
+    downloaded = 1
+    finished = 2
+    running = 3
+    processing = 98
+    error = 99
+
+    def __eq__(self, other):
+        if other.__class__ is int:
+            return self.value == other
+        elif other.__class__ is self.__class__:
+            return self.value == other.value
+        else:
+            raise NotImplementedError
+
+    def __lt__(self, other):
+        if self.__class__ is not other.__class__:
+            raise NotImplementedError
+        return self.value < other.value
+
+
+def get_db_columns():
+    with sqlite3.connect(DATABASE) as db:
+        db.row_factory = sqlite3.Row
+        cursor = db.cursor()
+        columns = "target_name,priority,finished,sas_id_calibrator1,sas_id_calibrator2,sas_id_calibrator_final,sas_id_target,status_calibrator1,status_calibrator2,status_target,status_vlbi_delay"
+        field = cursor.execute(
+            f"select {columns} from {TABLE_NAME} where finished==0 order by priority"
+        ).fetchall()
+        print(field)
+    return field
+
+
+def set_status_processing(name, identifier, target):
+    with sqlite3.connect(DATABASE) as db:
+        cursor = db.cursor()
+        cursor.execute(
+            f"update {TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.processing.value} where target_name=='{name}' and sas_id_target=='{target}'"
+        )
+
+
+def set_status_finished(name, identifier, target):
+    with sqlite3.connect(DATABASE) as db:
+        cursor = db.cursor()
+        cursor.execute(
+            f"update {TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.finished.value} where target_name=='{name}' and sas_id_target=='{target}'"
+        )
+
+
+def set_final_calibrator(name, target, final_cal):
+    with sqlite3.connect(DATABASE) as db:
+        cursor = db.cursor()
+        cursor.execute(
+            f"update {TABLE_NAME} set sas_id_calibrator_final={final_cal} where target_name=='{name}' and sas_id_target=='{target}'"
+        )
+
+
+def get_most_recent_run(searchpath: str, sas_id: str) -> pathlib.Path:
+    rundirs = pathlib.Path(searchpath)
+    rundirs_sorted = sorted(rundirs.iterdir(), key=os.path.getctime)
+    rundirs_sorted_filtered = [d for d in rundirs_sorted if sas_id in d.parts[-1]]
+    rundir_final = rundirs_sorted_filtered[-1].absolute()
+    return rundir_final
+
+
+@dag
+def linc():
+    @task
+    def get_unprocessed_target():
+        field = dict(get_db_columns()[0])
+        print(field["target_name"])
+        return field
+
+    @task.short_circuit
+    def check_fields():
+        fields = get_db_columns()
+        return bool(fields)
+
+    @task
+    def run_linc_calibrator1(field):
+        if (field["status_calibrator1"] == PIPELINE_STATUS.finished) or (
+            field["status_calibrator1"] == PIPELINE_STATUS.running
+        ):
+            print(
+                f"Flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']} already processed."
+            )
+            return field
+        else:
+            print(
+                f"Processing flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']}"
+            )
+            ms_folder = f"L{field['sas_id_calibrator1']}"
+            set_status_processing(
+                field["target_name"], "calibrator1", field["sas_id_target"]
+            )
+            outdir = os.path.join(
+                "/snap8/scratch/do011/dc-swei1/airflow/output", field["target_name"]
+            )
+            cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir /snap8/scratch/do011/dc-swei1/airflow/rundir --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
+            if not os.path.isdir(outdir):
+                os.mkdir(outdir)
+            print(cmd)
+            with open(
+                f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator1']}.txt",
+                "w",
+            ) as f_out, open(
+                f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator1']}_err.txt",
+                "w",
+            ) as f_err:
+                proc = subprocess.run(
+                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                )
+                if not proc.returncode:
+                    set_status_finished(
+                        field["target_name"], "calibrator1", field["sas_id_target"]
+                    )
+                else:
+                    raise RuntimeError
+        return field
+
+    @task
+    def run_linc_calibrator2(field):
+        raise AirflowSkipException()
+
+    @task(trigger_rule=TriggerRule.ONE_DONE)
+    def select_best_calibrator(result1, result2):
+        if result1 and result2:
+            print("Selecting between cal1 and cal2")
+            set_final_calibrator(
+                result1["target_name"],
+                result1["sas_id_target"],
+                result1["sas_id_calibrator1"],
+            )
+            return result1
+        elif result1 and (not result2):
+            print("Only cal 1 succeeded, continuing with that")
+            set_final_calibrator(
+                result1["target_name"],
+                result1["sas_id_target"],
+                result1["sas_id_calibrator1"],
+            )
+            return result1
+        elif (not result1) and result2:
+            print("Only cal 2 succeeded, continuing with that")
+            set_final_calibrator(
+                result1["target_name"],
+                result1["sas_id_target"],
+                result1["sas_id_calibrator2"],
+            )
+            return result2
+        else:
+            raise AirflowFailException("No calibrators succeeded; stopping processing.")
+
+    @task
+    def run_linc_target(field):
+        if (field["status_target"] == PIPELINE_STATUS.finished) or (
+            field["status_target"] == PIPELINE_STATUS.running
+        ):
+            return field
+        else:
+            print(
+                f"Processing target observation {field['target_name']} {field['sas_id_target']} with calibrator {field['sas_id_calibrator_final']}"
+            )
+            ms_folder = f"L{field['sas_id_target']}"
+            outdir = os.path.join(
+                "/snap8/scratch/do011/dc-swei1/airflow/output", field["target_name"]
+            )
+            calibrator_path = get_most_recent_run(
+                outdir, field["sas_id_calibrator_final"]
+            )
+            calibrator_solutions = (
+                calibrator_path / "results_LINC_calibrator" / "cal_solutions.h5"
+            )
+            set_status_processing(
+                field["target_name"], "target", field["sas_id_target"]
+            )
+            cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir /snap8/scratch/do011/dc-swei1/airflow/rundir --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
+            if not os.path.isdir(outdir):
+                os.mkdir(outdir)
+            print(cmd)
+            with open(
+                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
+                "w",
+            ) as f_out, open(
+                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                "w",
+            ) as f_err:
+                proc = subprocess.run(
+                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                )
+                if not proc.returncode:
+                    return True
+                    set_status_finished(
+                        field["target_name"], "target", field["sas_id_target"]
+                    )
+                else:
+                    raise RuntimeError
+        return field
+
+    @task
+    def validate_linc_target(field):
+        return True
+
+    @task
+    def run_vlbi_delay(field):
+        return True
+
+    @task
+    def run_ddf_pipeline(field):
+        return True
+
+    proceed = check_fields()
+    field = get_unprocessed_target()
+    result_cal1 = run_linc_calibrator1(field)
+    result_cal2 = run_linc_calibrator2(field)
+    best_cal = select_best_calibrator(result_cal1, result_cal2)
+    result_targ = run_linc_target(best_cal)
+    linc_is_valid = validate_linc_target(result_targ)
+    result_vlbi_delay = run_vlbi_delay(linc_is_valid)
+    # run_ddf_pipeline(vlbi_delay_is_valid)
+
+    proceed >> field
+
+
+linc()
