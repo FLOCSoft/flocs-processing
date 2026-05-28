@@ -4,10 +4,13 @@ import os
 import pathlib
 import sqlite3
 import subprocess
+import time
 
 from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.sdk import dag, task
 from airflow.task.trigger_rule import TriggerRule
+from flocs_lta.lta_search import ObservationStager
+from stager_access import get_surls_requested, get_surls_online
 
 # Need to replace this with a config file
 TABLE_NAME = ""
@@ -44,7 +47,7 @@ def get_db_columns():
     with sqlite3.connect(DATABASE) as db:
         db.row_factory = sqlite3.Row
         cursor = db.cursor()
-        columns = "target_name,priority,finished,sas_id_calibrator1,sas_id_calibrator2,sas_id_calibrator_final,sas_id_target,status_calibrator1,status_calibrator2,status_target,status_vlbi_delay"
+        columns = "target_name,priority,finished,downloaded,sas_id_calibrator1,sas_id_calibrator2,sas_id_calibrator_final,sas_id_target,status_calibrator1,status_calibrator2,status_target,status_vlbi_delay"
         field = cursor.execute(
             f"select {columns} from {TABLE_NAME} where finished==0 order by priority"
         ).fetchall()
@@ -65,6 +68,14 @@ def set_status_finished(name, identifier, target):
         cursor = db.cursor()
         cursor.execute(
             f"update {TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.finished.value} where target_name=='{name}' and sas_id_target=='{target}'"
+        )
+
+
+def set_status_downloaded(name, target):
+    with sqlite3.connect(DATABASE) as db:
+        cursor = db.cursor()
+        cursor.execute(
+            f"update {TABLE_NAME} set downloaded=1 where target_name=='{name}' and sas_id_target=='{target}'"
         )
 
 
@@ -96,6 +107,120 @@ def linc():
     def check_fields():
         fields = get_db_columns()
         return bool(fields)
+
+    @task
+    def download_field(field):
+        if field["downloaded"]:
+            return field
+        else:
+            has_cal1 = False
+            stage_calibrators = False
+            if field["sas_id_calibrator1"]:
+                ms_folder = f"L{field['sas_id_calibrator1']}"
+                cal1_full_path = os.path.join(
+                    DATA_DIR, field["target_name"], "calibrator", ms_folder
+                )
+                if os.path.exists(cal1_full_path):
+                    has_cal1 = True
+                else:
+                    stage_calibrators = True
+
+            has_cal2 = False
+            if field["sas_id_calibrator2"]:
+                ms_folder = f"L{field['sas_id_calibrator2']}"
+                cal2_full_path = os.path.join(
+                    DATA_DIR, field["target_name"], "calibrator", ms_folder
+                )
+                if os.path.exists(cal2_full_path):
+                    has_cal2 = True
+                else:
+                    stage_calibrators = True
+            if field["sas_id_target"]:
+                ms_folder = f"L{field['sas_id_target']}"
+                target_full_path = os.path.join(
+                    DATA_DIR, field["target_name"], "target", ms_folder
+                )
+                if os.path.exists(target_full_path):
+                    stage_target = False
+                else:
+                    stage_target = True
+            else:
+                raise AirflowFailException(
+                    f"No target SAS ID in database for field {field['target_name']}"
+                )
+
+            print(f"Field {field['sas_id_target']} is not downloaded.")
+            stager = ObservationStager(get_surls=True)
+            stager.find_observation_by_sasid(
+                "ALL",
+                field["sas_id_target"],
+                None,
+                120e6,
+                168e6,
+            )
+            if stage_calibrators:
+                stager.find_nearest_calibrators(2, 120e6, 168e6)
+                stage_id_calibrators = stager.stage_calibrators()
+            if stage_target:
+                stage_id_target = stager.stage_target()
+
+            calibrator_staged = False
+            target_staged = False
+            calibrator_downloaded = has_cal1 or has_cal2
+            target_downloaded = not stage_target
+            while True:
+                if len(get_surls_online(stage_id_calibrators)) == len(
+                    get_surls_requested(stage_id_calibrators)
+                ):
+                    calibrator_staged = True
+                if calibrator_staged and not calibrator_downloaded:
+                    dl_path = os.path.join(DATA_DIR, field["target_name"], "calibrator")
+                    cmd = (
+                        f"flocs-lta download --outdir {dl_path} {stage_id_calibrators}"
+                    )
+                    with open(
+                        f"log_download_calibrators_{field['target_name']}.txt",
+                        "w",
+                    ) as f_out, open(
+                        f"log_download_calibrators_{field['target_name']}.txt",
+                        "w",
+                    ) as f_err:
+                        proc = subprocess.run(
+                            cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                        )
+                        if not proc.returncode:
+                            calibrator_downloaded = True
+                        else:
+                            raise RuntimeError
+
+                if len(get_surls_online(stage_id_target)) == len(
+                    get_surls_requested(stage_id_target)
+                ):
+                    calibrator_staged = True
+                if target_staged and not target_downloaded:
+                    dl_path = os.path.join(DATA_DIR, field["target_name"], "target")
+                    cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
+                    with open(
+                        f"log_download_calibrators_{field['target_name']}.txt",
+                        "w",
+                    ) as f_out, open(
+                        f"log_download_calibrators_{field['target_name']}.txt",
+                        "w",
+                    ) as f_err:
+                        proc = subprocess.run(
+                            cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                        )
+                        if not proc.returncode:
+                            set_status_downloaded(
+                                field["target_name"],
+                                field["sas_id_target"],
+                            )
+                            target_downloaded = True
+                        else:
+                            raise RuntimeError
+                if calibrator_downloaded and target_downloaded:
+                    break
+                time.sleep(60)
 
     @task
     def run_linc_calibrator1(field):
@@ -231,7 +356,8 @@ def linc():
         return True
 
     proceed = check_fields()
-    field = get_unprocessed_target()
+    get_field = get_unprocessed_target()
+    field = download_field(get_field)
     result_cal1 = run_linc_calibrator1(field)
     result_cal2 = run_linc_calibrator2(field)
     best_cal = select_best_calibrator(result_cal1, result_cal2)
@@ -240,7 +366,7 @@ def linc():
     result_vlbi_delay = run_vlbi_delay(linc_is_valid)
     # run_ddf_pipeline(vlbi_delay_is_valid)
 
-    proceed >> field
+    proceed >> get_field
 
 
 linc()

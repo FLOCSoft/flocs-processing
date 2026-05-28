@@ -98,18 +98,25 @@ def create_database(
         "linc"
     ],
 ):
+    pipeline_str = ",".join(pipelines)
     pipelines = list(map(str.lower, pipelines))
-    dbstr = f"create table {table_name}(source_name text default NULL"
+    dbstr = f"create table {table_name}(target_name text default NULL, pipelines text default '{pipeline_str}', priority int default 0, finished bit default 0, downloaded bit default 0"
 
     if "linc" in pipelines:
         dbstr += ", sas_id_calibrator1 text default NULL, sas_id_calibrator2 text default NULL, sas_id_calibrator_final text default NULL, sas_id_target text primary key default NULL, status_calibrator1 smallint default 0, status_calibrator2 smallint default 0, status_target smallint default 0"
     if "ddf-pipeline" in pipelines:
-        dbstr += ", status_ddf smallint default 0"
+        dbstr += f", status_ddf smallint default {PIPELINE_STATUS.nothing.value}"
     if "vlbi-delay-widefield" in pipelines:
-        dbstr += ", status_ddf smallint default 0"
-        dbstr += ", status_delay smallint default 0"
+        dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
+        dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
+        dbstr += f", status_vlbi_intermediate_img smallint default {PIPELINE_STATUS.nothing.value}"
+        dbstr += f", status_vlbi_facet_subtract smallint default {PIPELINE_STATUS.nothing.value}"
+        dbstr += (
+            f", status_vlbi_facet_img smallint default {PIPELINE_STATUS.nothing.value}"
+        )
     if "vlbi-delay-single-target" in pipelines:
-        dbstr += ", status_delay smallint default 0"
+        dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
+        dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
     dbstr += ");"
 
     cmd = ["sqlite3", dbname, dbstr]
@@ -137,8 +144,11 @@ def add_field(
     table_name: Annotated[
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
+    pipelines: Annotated[
+        str, Parameter(help="Pipelines this field needs to be processed with.")
+    ] = "",
 ):
-    dbstr = f"insert into {table_name} (source_name"
+    dbstr = f"insert into {table_name} (target_name"
     if len(sas_id_calibrators) == 1:
         dbstr += ", sas_id_calibrator1"
     if len(sas_id_calibrators) == 2:
@@ -316,7 +326,10 @@ class FlocsSlurmProcessor:
             rundirs_sorted_filtered = [
                 d
                 for d in rundirs_sorted
-                if ((sas_id in d.parts[-1]) and (d.parts[-1].startswith(("LINC_target"))))
+                if (
+                    (sas_id in d.parts[-1])
+                    and (d.parts[-1].startswith(("LINC_target")))
+                )
             ]
             # Last LINC target reduction for this source
             linc_target_dir = rundirs_sorted_filtered[-1]
@@ -373,7 +386,10 @@ class FlocsSlurmProcessor:
             rundirs_sorted_filtered = [
                 d
                 for d in rundirs_sorted
-                if ((sas_id in d.parts[-1]) and (d.parts[-1].startswith(("LINC_target"))))
+                if (
+                    (sas_id in d.parts[-1])
+                    and (d.parts[-1].startswith(("LINC_target")))
+                )
             ]
             # Last LINC target reduction for this source
             linc_target_dir = rundirs_sorted_filtered[-1]
