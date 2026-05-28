@@ -149,20 +149,23 @@ def linc():
                     f"No target SAS ID in database for field {field['target_name']}"
                 )
 
-            print(f"Field {field['sas_id_target']} is not downloaded.")
-            stager = ObservationStager(get_surls=True)
-            stager.find_observation_by_sasid(
-                "ALL",
-                field["sas_id_target"],
-                None,
-                120e6,
-                168e6,
-            )
-            if stage_calibrators:
-                stager.find_nearest_calibrators(2, 120e6, 168e6)
-                stage_id_calibrators = stager.stage_calibrators()
-            if stage_target:
-                stage_id_target = stager.stage_target()
+            if stage_calibrators or stage_target:
+                print(f"Field {field['sas_id_target']} is not downloaded.")
+                stager = ObservationStager(get_surls=True)
+                stager.find_observation_by_sasid(
+                    "ALL",
+                    field["sas_id_target"],
+                    None,
+                    120e6,
+                    168e6,
+                )
+                if stage_calibrators:
+                    stager.find_nearest_calibrators(2, 120e6, 168e6)
+                    stage_id_calibrators = stager.stage_calibrators()
+                if stage_target:
+                    stage_id_target = stager.stage_target()
+            else:
+                return field
 
             calibrator_staged = False
             target_staged = False
