@@ -18,6 +18,8 @@ DATABASE = ""
 SLURM_ACCOUNT = ""
 SLURM_QUEUE = ""
 DATA_DIR = ""
+OUTPUT_DIR = ""
+PROCESSING_DIR = ""
 
 
 @functools.total_ordering
@@ -87,10 +89,17 @@ def set_final_calibrator(name, target, final_cal):
         )
 
 
-def get_most_recent_run(searchpath: str, sas_id: str) -> pathlib.Path:
+def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.Path:
     rundirs = pathlib.Path(searchpath)
     rundirs_sorted = sorted(rundirs.iterdir(), key=os.path.getctime)
-    rundirs_sorted_filtered = [d for d in rundirs_sorted if sas_id in d.parts[-1]]
+    if pipeline:
+        rundirs_sorted_filtered = [
+            d
+            for d in rundirs_sorted
+            if ((sas_id in d.parts[-1]) and (pipeline in d.parts[-1]))
+        ]
+    else:
+        rundirs_sorted_filtered = [d for d in rundirs_sorted if sas_id in d.parts[-1]]
     rundir_final = rundirs_sorted_filtered[-1].absolute()
     return rundir_final
 
@@ -242,10 +251,8 @@ def linc():
             set_status_processing(
                 field["target_name"], "calibrator1", field["sas_id_target"]
             )
-            outdir = os.path.join(
-                "/snap8/scratch/do011/dc-swei1/airflow/output", field["target_name"]
-            )
-            cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir /snap8/scratch/do011/dc-swei1/airflow/rundir --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
+            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+            cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
             if not os.path.isdir(outdir):
                 os.mkdir(outdir)
             print(cmd)
@@ -311,11 +318,9 @@ def linc():
                 f"Processing target observation {field['target_name']} {field['sas_id_target']} with calibrator {field['sas_id_calibrator_final']}"
             )
             ms_folder = f"L{field['sas_id_target']}"
-            outdir = os.path.join(
-                "/snap8/scratch/do011/dc-swei1/airflow/output", field["target_name"]
-            )
+            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
             calibrator_path = get_most_recent_run(
-                outdir, field["sas_id_calibrator_final"]
+                outdir, field["sas_id_calibrator_final"], "LINC_calibrator"
             )
             calibrator_solutions = (
                 calibrator_path / "results_LINC_calibrator" / "cal_solutions.h5"
@@ -323,7 +328,7 @@ def linc():
             set_status_processing(
                 field["target_name"], "target", field["sas_id_target"]
             )
-            cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir /snap8/scratch/do011/dc-swei1/airflow/rundir --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
+            cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
             if not os.path.isdir(outdir):
                 os.mkdir(outdir)
             print(cmd)
@@ -352,7 +357,45 @@ def linc():
 
     @task
     def run_vlbi_delay(field):
-        return True
+        if (field["status_vlbi_delay"] == PIPELINE_STATUS.finished) or (
+            field["status_vlbi_delay"] == PIPELINE_STATUS.running
+        ):
+            return field
+        else:
+            print(
+                f"Processing delay calibration for {field['target_name']} {field['sas_id_target']}"
+            )
+            ms_folder = f"L{field['sas_id_target']}"
+            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+            target_path = get_most_recent_run(
+                outdir, field["sas_id_calibrator_final"], "LINC_target"
+            )
+            target_ms_path = target_path / "results_LINC_target" / "results"
+            set_status_processing(
+                field["target_name"], "vlbi_delay", field["sas_id_target"]
+            )
+            cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {target_ms_path}"
+            if not os.path.isdir(outdir):
+                os.mkdir(outdir)
+            print(cmd)
+            with open(
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+                "w",
+            ) as f_out, open(
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                "w",
+            ) as f_err:
+                proc = subprocess.run(
+                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                )
+                if not proc.returncode:
+                    return True
+                    set_status_finished(
+                        field["target_name"], "vlbi_delay", field["sas_id_target"]
+                    )
+                else:
+                    raise RuntimeError
+        return field
 
     @task
     def run_ddf_pipeline(field):
