@@ -422,6 +422,8 @@ def linc():
             source_cat = os.path.join(
                 DATA_DIR, field["target_name"], "target", "vlbi_target.csv"
             )
+            if not os.path.isfile(source_cat):
+                raise AirflowFailException(f"{source_cat} not found.")
 
             set_status_processing(
                 field["target_name"], "vlbi_dd", field["sas_id_target"]
