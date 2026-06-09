@@ -409,7 +409,7 @@ def linc():
             )
             outdir = os.path.join(OUTPUT_DIR, field["target_name"])
             target_path = get_most_recent_run(
-                outdir, field["sas_id_calibrator_final"], "LINC_target"
+                outdir, field["sas_id_target"], "LINC_target"
             )
             target_ms_path = target_path / "results_LINC_target" / "results"
 
