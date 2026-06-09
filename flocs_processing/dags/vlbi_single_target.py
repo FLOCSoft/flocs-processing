@@ -431,7 +431,7 @@ def single_target_vlbi(max_active_runs=1):
             print(f"Using PILOT delay calibration run: {sols_path}")
 
             source_cat = os.path.join(
-                DATA_DIR, field["target_name"], "target", "vlbi_target.csv"
+                DATA_DIR, field["target_name"], "vlbi_target.csv"
             )
             if not os.path.isfile(source_cat):
                 raise AirflowFailException(f"{source_cat} not found.")
