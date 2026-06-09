@@ -49,7 +49,7 @@ def get_db_columns():
     with sqlite3.connect(DATABASE) as db:
         db.row_factory = sqlite3.Row
         cursor = db.cursor()
-        columns = "target_name,priority,finished,downloaded,sas_id_calibrator1,sas_id_calibrator2,sas_id_calibrator_final,sas_id_target,status_calibrator1,status_calibrator2,status_target,status_vlbi_delay"
+        columns = "target_name,priority,finished,downloaded,sas_id_calibrator1,sas_id_calibrator2,sas_id_calibrator_final,sas_id_target,status_calibrator1,status_calibrator2,status_target,status_vlbi_delay,status_vlbi_dd"
         field = cursor.execute(
             f"select {columns} from {TABLE_NAME} where finished==0 order by priority"
         ).fetchall()
