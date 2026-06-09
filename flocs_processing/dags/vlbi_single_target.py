@@ -13,13 +13,13 @@ from flocs_lta.lta_search import ObservationStager
 from stager_access import get_surls_requested, get_surls_online
 
 # Need to replace this with a config file
-TABLE_NAME = ""
-DATABASE = ""
-SLURM_ACCOUNT = ""
-SLURM_QUEUE = ""
-DATA_DIR = ""
-OUTPUT_DIR = ""
-PROCESSING_DIR = ""
+TABLE_NAME = "processing_banados"
+DATABASE = "/project/lofarvlbi/Data/fsweijen/banados-high-z/banados_airflow.sqlite"
+SLURM_ACCOUNT = "lofarvlbi-fsweijen"
+SLURM_QUEUE = "normal,long"
+DATA_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z"
+OUTPUT_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z"
+PROCESSING_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z/processing"
 
 
 @functools.total_ordering
@@ -81,6 +81,15 @@ def set_status_downloaded(name, target):
         )
 
 
+def set_field_finished(name, target):
+    # name = str(field_dict["target_name"])
+    # target = str(field_dict["sas_id_target"])
+    query = f"update {TABLE_NAME} set downloaded=1 where target_name=='{name}' and sas_id_target=='{target}'"
+    with sqlite3.connect(DATABASE) as db:
+        cursor = db.cursor()
+        cursor.execute(query)
+
+
 def set_final_calibrator(name, target, final_cal):
     with sqlite3.connect(DATABASE) as db:
         cursor = db.cursor()
@@ -105,7 +114,7 @@ def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.
 
 
 @dag
-def linc():
+def single_target_vlbi(max_active_runs=1):
     @task
     def get_unprocessed_target():
         field = dict(get_db_columns()[0])
@@ -412,12 +421,14 @@ def linc():
                 outdir, field["sas_id_target"], "LINC_target"
             )
             target_ms_path = target_path / "results_LINC_target" / "results"
+            print(f"Using LINC target run: {target_path}")
 
             sols_path = get_most_recent_run(
                 outdir, field["sas_id_target"], "VLBI_delay"
             )
             sols_path = sols_path / "results_VLBI_delay-calibration" / "results"
             sols = sols_path.glob("merged_*_selfcalcycle???_linearfulljones*.h5")
+            print(f"Using PILOT delay calibration run: {sols_path}")
 
             source_cat = os.path.join(
                 DATA_DIR, field["target_name"], "target", "vlbi_target.csv"
@@ -447,6 +458,7 @@ def linc():
                     set_status_finished(
                         field["target_name"], "vlbi_dd", field["sas_id_target"]
                     )
+                    set_field_finished(field["target_name"], field["sas_id_target"])
                 else:
                     raise RuntimeError
         return field
@@ -470,4 +482,4 @@ def linc():
     proceed >> get_field
 
 
-linc()
+single_target_vlbi()
