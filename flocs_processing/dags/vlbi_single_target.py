@@ -353,7 +353,7 @@ def linc():
 
     @task
     def validate_linc_target(field):
-        return True
+        return field
 
     @task
     def run_vlbi_delay(field):
