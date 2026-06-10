@@ -100,12 +100,12 @@ def set_final_calibrator(name, target, final_cal):
 
 def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.Path:
     rundirs = pathlib.Path(searchpath)
-    rundirs_sorted = sorted(rundirs.iterdir(), key=os.path.getctime)
+    rundirs_sorted = sorted(rundirs.iterdir())
     if pipeline:
         rundirs_sorted_filtered = [
             d
             for d in rundirs_sorted
-            if ((sas_id in d.parts[-1]) and (pipeline in d.parts[-1]))
+            if ((sas_id in d.parts[-1]) and (pipeline in d.parts[-1])) and d.is_dir()
         ]
     else:
         rundirs_sorted_filtered = [d for d in rundirs_sorted if sas_id in d.parts[-1]]
