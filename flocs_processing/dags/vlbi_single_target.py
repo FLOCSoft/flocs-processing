@@ -437,7 +437,7 @@ def single_target_vlbi(max_active_runs=1):
             set_status_processing(
                 field["target_name"], "vlbi_dd", field["sas_id_target"]
             )
-            cmd = f"flocs-run vlbi dd-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --phasediff-score 10.0 --source-catalogue {source_cat} {target_ms_path}"
+            cmd = f"flocs-run vlbi dd-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --phasediff-score 10.0 --source-catalogue {source_cat} --ms-suffix .dp3concat {target_ms_path}"
             if not os.path.isdir(outdir):
                 os.mkdir(outdir)
             print(cmd)
