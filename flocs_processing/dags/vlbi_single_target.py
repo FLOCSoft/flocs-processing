@@ -426,7 +426,7 @@ def single_target_vlbi(max_active_runs=1):
             sols_path = get_most_recent_run(
                 outdir, field["sas_id_target"], "VLBI_delay"
             )
-            sols_path = sols_path / "results_VLBI_delay-calibration" / "results"
+            sols_path = sols_path / "results_VLBI_delay-calibration"
             sols = sols_path.glob("merged_*_selfcalcycle???_linearfulljones*.h5")
             print(f"Using PILOT delay calibration solutions: {sols}")
 
