@@ -13,13 +13,13 @@ from flocs_lta.lta_search import ObservationStager
 from stager_access import get_surls_requested, get_surls_online
 
 # Need to replace this with a config file
-TABLE_NAME = "processing_banados"
-DATABASE = "/project/lofarvlbi/Data/fsweijen/banados-high-z/banados_airflow.sqlite"
-SLURM_ACCOUNT = "lofarvlbi-fsweijen"
-SLURM_QUEUE = "normal,long"
-DATA_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z"
-OUTPUT_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z"
-PROCESSING_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z/processing"
+TABLE_NAME = ""
+DATABASE = ""
+SLURM_ACCOUNT = ""
+SLURM_QUEUE = ""
+DATA_DIR = ""
+OUTPUT_DIR = ""
+PROCESSING_DIR = ""
 
 
 @functools.total_ordering
@@ -428,11 +428,9 @@ def single_target_vlbi(max_active_runs=1):
             )
             sols_path = sols_path / "results_VLBI_delay-calibration" / "results"
             sols = sols_path.glob("merged_*_selfcalcycle???_linearfulljones*.h5")
-            print(f"Using PILOT delay calibration run: {sols_path}")
+            print(f"Using PILOT delay calibration solutions: {sols}")
 
-            source_cat = os.path.join(
-                DATA_DIR, field["target_name"], "vlbi_target.csv"
-            )
+            source_cat = os.path.join(DATA_DIR, field["target_name"], "vlbi_target.csv")
             if not os.path.isfile(source_cat):
                 raise AirflowFailException(f"{source_cat} not found.")
 
