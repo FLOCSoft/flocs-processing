@@ -1,13 +1,15 @@
 from enum import Enum
+import datetime
 import functools
 import os
 import pathlib
+import re
 import sqlite3
 import subprocess
 import time
 
 from airflow.exceptions import AirflowFailException, AirflowSkipException
-from airflow.sdk import dag, task
+from airflow.sdk import dag, get_current_context, task
 from airflow.task.trigger_rule import TriggerRule
 from flocs_lta.lta_search import ObservationStager
 from stager_access import get_surls_requested, get_surls_online
@@ -20,6 +22,7 @@ SLURM_QUEUE = ""
 DATA_DIR = ""
 OUTPUT_DIR = ""
 PROCESSING_DIR = ""
+NN_MODEL_CACHE = ""
 
 
 @functools.total_ordering
@@ -364,7 +367,7 @@ def single_target_vlbi():
     def validate_linc_target(field):
         return field
 
-    @task
+    @task(retries=2, retry_delay=datetime.timedelta(seconds=5))
     def run_vlbi_delay(field):
         if (field["status_vlbi_delay"] == PIPELINE_STATUS.finished) or (
             field["status_vlbi_delay"] == PIPELINE_STATUS.running
@@ -374,7 +377,6 @@ def single_target_vlbi():
             print(
                 f"Processing delay calibration for {field['target_name']} {field['sas_id_target']}"
             )
-            ms_folder = f"L{field['sas_id_target']}"
             outdir = os.path.join(OUTPUT_DIR, field["target_name"])
             target_path = get_most_recent_run(
                 outdir, field["sas_id_target"], "LINC_target"
@@ -383,26 +385,60 @@ def single_target_vlbi():
             set_status_processing(
                 field["target_name"], "vlbi_delay", field["sas_id_target"]
             )
-            cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat {target_ms_path}"
+
+            delay_cat = os.path.join(outdir, "delay_calibrators.csv")
+
+            proc = subprocess.run("detect_bad_slurm_nodes.sh", shell=True, text=True)
+            bad_nodes = proc.stdout
+            os.environ["TOIL_SLURM_ARGS"] = f"--exclude={bad_nodes}"
+
+            context = get_current_context()
+            if context["ti"].try_number == 1:
+                cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} {target_ms_path}"
+            else:
+                flocs_workdir = context["ti"].xcom_pull(
+                    task_ids=context["ti"].task_id, key="flocs_workdir"
+                )
+                print(f"Resuming failed PILOT run in {flocs_workdir}")
+                cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix dp3concat --delay-calibrators {delay_cat} {target_ms_path}"
             if not os.path.isdir(outdir):
                 os.mkdir(outdir)
             print(cmd)
             with open(
                 f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
-                "w",
+                "w+",
             ) as f_out, open(
                 f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                "w",
+                "w+",
             ) as f_err:
                 proc = subprocess.run(
                     cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                 )
+                success = False
+                pattern = re.compile(r"Workflow.* stopped. Success: False")
                 if not proc.returncode:
-                    return True
+                    if not pattern.search(proc.stderr):
+                        success = True
+
+                if success:
                     set_status_finished(
                         field["target_name"], "vlbi_delay", field["sas_id_target"]
                     )
                 else:
+                    f_out.seek(0)
+                    flocs_workdir = ""
+                    for line in f_out.readlines():
+                        print(line)
+                        if "Running workflow with" in line:
+                            flocs_workdir = line.split(" ")[-1]
+                            break
+                    if not flocs_workdir:
+                        raise RuntimeError("Could not retrieve PILOT workdir. Flocs probably crashed before launching.")
+                    if context["ti"].try_number == 1:
+                        print(f"PILOT failed, storing rundir {flocs_workdir} for retries in `flocs_workdir`")
+                        context["ti"].xcom_push(
+                            key="flocs_workdir", value=flocs_workdir
+                        )
                     raise RuntimeError
         return field
 
