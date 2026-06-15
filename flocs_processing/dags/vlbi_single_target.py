@@ -113,8 +113,8 @@ def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.
     return rundir_final
 
 
-@dag
-def single_target_vlbi(max_active_runs=1):
+@dag(max_active_runs=1)
+def single_target_vlbi():
     @task
     def get_unprocessed_target():
         field = dict(get_db_columns()[0])
@@ -377,7 +377,7 @@ def single_target_vlbi(max_active_runs=1):
             ms_folder = f"L{field['sas_id_target']}"
             outdir = os.path.join(OUTPUT_DIR, field["target_name"])
             target_path = get_most_recent_run(
-                outdir, field["sas_id_calibrator_final"], "LINC_target"
+                outdir, field["sas_id_target"], "LINC_target"
             )
             target_ms_path = target_path / "results_LINC_target" / "results"
             set_status_processing(
