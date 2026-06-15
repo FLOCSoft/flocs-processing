@@ -383,7 +383,7 @@ def single_target_vlbi():
             set_status_processing(
                 field["target_name"], "vlbi_delay", field["sas_id_target"]
             )
-            cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {target_ms_path}"
+            cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat {target_ms_path}"
             if not os.path.isdir(outdir):
                 os.mkdir(outdir)
             print(cmd)
