@@ -220,7 +220,7 @@ def single_target_vlbi():
                 if len(get_surls_online(stage_id_target)) == len(
                     get_surls_requested(stage_id_target)
                 ):
-                    calibrator_staged = True
+                    target_staged = True
                 if target_staged and not target_downloaded:
                     dl_path = os.path.join(DATA_DIR, field["target_name"], "target")
                     cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
@@ -388,7 +388,12 @@ def single_target_vlbi():
 
             delay_cat = os.path.join(outdir, "delay_calibrators.csv")
 
-            proc = subprocess.run("detect_bad_slurm_nodes.sh", shell=True, text=True, stdout=subprocess.PIPE)
+            proc = subprocess.run(
+                "detect_bad_slurm_nodes.sh",
+                shell=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            )
             bad_nodes = proc.stdout.strip()
             if bad_nodes:
                 os.environ["TOIL_SLURM_ARGS"] = f"--exclude={bad_nodes}"
@@ -399,15 +404,21 @@ def single_target_vlbi():
             else:
                 # Extract the previous working directory
                 flocs_workdir = ""
-                print(f"Scanning log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir.")
-                with open(f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt") as f_out:
+                print(
+                    f"Scanning log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
+                )
+                with open(
+                    f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
+                ) as f_out:
                     for line in f_out.readlines():
                         print(line)
                         if "Running workflow with" in line:
                             flocs_workdir = line.split(" ")[-1]
                             break
                 if not flocs_workdir:
-                    raise RuntimeError("Could not retrieve PILOT workdir. Flocs probably crashed before launching.")
+                    raise RuntimeError(
+                        "Could not retrieve PILOT workdir. Flocs probably crashed before launching."
+                    )
                 print(f"Resuming failed PILOT run in {flocs_workdir}")
                 cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} {target_ms_path}"
             if not os.path.isdir(outdir):
