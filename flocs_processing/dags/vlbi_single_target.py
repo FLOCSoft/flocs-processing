@@ -15,14 +15,14 @@ from flocs_lta.lta_search import ObservationStager
 from stager_access import get_surls_requested, get_surls_online
 
 # Need to replace this with a config file
-TABLE_NAME = "processing_banados"
-DATABASE = "/project/lofarvlbi/Data/fsweijen/banados-high-z/banados_airflow.sqlite"
-SLURM_ACCOUNT = "lofarvlbi"
-SLURM_QUEUE = "normal"
-DATA_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z"
-OUTPUT_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z"
-PROCESSING_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z/processing"
-NN_MODEL_CACHE = "/project/lofarvlbi/Software/fsweijen/nn_cache"
+TABLE_NAME = ""
+DATABASE = ""
+SLURM_ACCOUNT = ""
+SLURM_QUEUE = ""
+DATA_DIR = ""
+OUTPUT_DIR = ""
+PROCESSING_DIR = ""
+NN_MODEL_CACHE = ""
 
 
 @functools.total_ordering
