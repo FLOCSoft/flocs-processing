@@ -220,7 +220,7 @@ def single_target_vlbi():
                 if len(get_surls_online(stage_id_target)) == len(
                     get_surls_requested(stage_id_target)
                 ):
-                    target_staged = True
+                    calibrator_staged = True
                 if target_staged and not target_downloaded:
                     dl_path = os.path.join(DATA_DIR, field["target_name"], "target")
                     cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
@@ -387,40 +387,31 @@ def single_target_vlbi():
             )
 
             delay_cat = os.path.join(outdir, "delay_calibrators.csv")
+            image_cat = os.path.join(outdir, "image_catalogue.csv")
 
-            proc = subprocess.run(
-                "detect_bad_slurm_nodes.sh",
-                shell=True,
-                text=True,
-                stdout=subprocess.PIPE,
-            )
+            proc = subprocess.run("detect_bad_slurm_nodes.sh", shell=True, text=True, stdout=subprocess.PIPE)
             bad_nodes = proc.stdout.strip()
             if bad_nodes:
+                print(f"Excluding the following bad nodes from scheduling: {bad_nodes}")
                 os.environ["TOIL_SLURM_ARGS"] = f"--exclude={bad_nodes}"
 
             context = get_current_context()
             if context["ti"].try_number == 1:
-                cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} {target_ms_path}"
+                cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} {target_ms_path}"
             else:
                 # Extract the previous working directory
                 flocs_workdir = ""
-                print(
-                    f"Scanning log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
-                )
-                with open(
-                    f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
-                ) as f_out:
+                print(f"Scanning log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir.")
+                with open(f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt") as f_out:
                     for line in f_out.readlines():
                         print(line)
                         if "Running workflow with" in line:
-                            flocs_workdir = line.split(" ")[-1]
+                            flocs_workdir = line.split(" ")[-1].strip()
                             break
                 if not flocs_workdir:
-                    raise RuntimeError(
-                        "Could not retrieve PILOT workdir. Flocs probably crashed before launching."
-                    )
+                    raise RuntimeError("Could not retrieve PILOT workdir. Flocs probably crashed before launching.")
                 print(f"Resuming failed PILOT run in {flocs_workdir}")
-                cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} {target_ms_path}"
+                cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} {target_ms_path}"
             if not os.path.isdir(outdir):
                 os.mkdir(outdir)
             print(cmd)
@@ -435,9 +426,10 @@ def single_target_vlbi():
                     cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                 )
                 success = False
-                pattern = re.compile(r"Workflow.* stopped. Success: False")
+                pattern = re.compile(r"Workflow.* stopped. Success: True")
                 if not proc.returncode:
-                    if not pattern.search(proc.stderr):
+                    f_err.seek(0)
+                    if pattern.search(f_err.read()):
                         success = True
 
                 if success:
@@ -469,7 +461,7 @@ def single_target_vlbi():
                 outdir, field["sas_id_target"], "VLBI_delay"
             )
             sols_path = sols_path / "results_VLBI_delay-calibration"
-            sols = sols_path.glob("merged_*_selfcalcycle???_linearfulljones*.h5")
+            sols = list(sols_path.glob("merged*selfcalcycle???_linearfulljones*.h5"))[0]
             print(f"Using PILOT delay calibration solutions: {sols}")
 
             source_cat = os.path.join(DATA_DIR, field["target_name"], "vlbi_target.csv")
@@ -479,22 +471,27 @@ def single_target_vlbi():
             set_status_processing(
                 field["target_name"], "vlbi_dd", field["sas_id_target"]
             )
-            cmd = f"flocs-run vlbi dd-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --phasediff-score 10.0 --source-catalogue {source_cat} --ms-suffix .dp3concat {target_ms_path}"
+            cmd = f"flocs-run vlbi dd-calibration --runner toil --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --phasediff-score 10.0 --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat {target_ms_path}"
             if not os.path.isdir(outdir):
                 os.mkdir(outdir)
             print(cmd)
             with open(
                 f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
-                "w",
+                "w+",
             ) as f_out, open(
                 f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                "w",
+                "w+",
             ) as f_err:
                 proc = subprocess.run(
                     cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                 )
+                success = False
+                pattern = re.compile(r"Workflow.* stopped. Success: True")
                 if not proc.returncode:
-                    return True
+                    f_err.seek(0)
+                    if pattern.search(f_err.read()):
+                        success = True
+                if success:
                     set_status_finished(
                         field["target_name"], "vlbi_dd", field["sas_id_target"]
                     )
