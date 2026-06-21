@@ -15,14 +15,14 @@ from flocs_lta.lta_search import ObservationStager
 from stager_access import get_surls_requested, get_surls_online
 
 # Need to replace this with a config file
-TABLE_NAME = ""
-DATABASE = ""
-SLURM_ACCOUNT = ""
-SLURM_QUEUE = ""
-DATA_DIR = ""
-OUTPUT_DIR = ""
-PROCESSING_DIR = ""
-NN_MODEL_CACHE = ""
+TABLE_NAME = "processing_banados"
+DATABASE = "/project/lofarvlbi/Data/fsweijen/banados-high-z/banados_airflow.sqlite"
+SLURM_ACCOUNT = "lofarvlbi"
+SLURM_QUEUE = "normal"
+DATA_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z"
+OUTPUT_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z"
+PROCESSING_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z/processing"
+NN_MODEL_CACHE = "/project/lofarvlbi/Software/fsweijen/nn_cache"
 
 
 @functools.total_ordering
@@ -85,9 +85,7 @@ def set_status_downloaded(name, target):
 
 
 def set_field_finished(name, target):
-    # name = str(field_dict["target_name"])
-    # target = str(field_dict["sas_id_target"])
-    query = f"update {TABLE_NAME} set downloaded=1 where target_name=='{name}' and sas_id_target=='{target}'"
+    query = f"update {TABLE_NAME} set finished=1 where target_name=='{name}' and sas_id_target=='{target}'"
     with sqlite3.connect(DATABASE) as db:
         cursor = db.cursor()
         cursor.execute(query)
@@ -204,10 +202,10 @@ def single_target_vlbi():
                     )
                     with open(
                         f"log_download_calibrators_{field['target_name']}.txt",
-                        "w",
+                        "w+",
                     ) as f_out, open(
                         f"log_download_calibrators_{field['target_name']}.txt",
-                        "w",
+                        "w+",
                     ) as f_err:
                         proc = subprocess.run(
                             cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -226,10 +224,10 @@ def single_target_vlbi():
                     cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
                     with open(
                         f"log_download_calibrators_{field['target_name']}.txt",
-                        "w",
+                        "w+",
                     ) as f_out, open(
                         f"log_download_calibrators_{field['target_name']}.txt",
-                        "w",
+                        "w+",
                     ) as f_err:
                         proc = subprocess.run(
                             cmd, shell=True, text=True, stdout=f_out, stderr=f_err
@@ -270,15 +268,21 @@ def single_target_vlbi():
             print(cmd)
             with open(
                 f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator1']}.txt",
-                "w",
+                "w+",
             ) as f_out, open(
                 f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator1']}_err.txt",
-                "w",
+                "w+",
             ) as f_err:
                 proc = subprocess.run(
                     cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                 )
+                success = False
+                pattern = re.compile(r"Workflow.* stopped. Success: True")
                 if not proc.returncode:
+                    f_err.seek(0)
+                    if pattern.search(f_err.read()):
+                        success = True
+                if success:
                     set_status_finished(
                         field["target_name"], "calibrator1", field["sas_id_target"]
                     )
@@ -288,12 +292,59 @@ def single_target_vlbi():
 
     @task
     def run_linc_calibrator2(field):
-        raise AirflowSkipException()
+        if (field["status_calibrator2"] == PIPELINE_STATUS.finished) or (
+            field["status_calibrator2"] == PIPELINE_STATUS.running
+        ):
+            print(
+                f"Flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']} already processed."
+            )
+            return field
+        else:
+            print(
+                f"Processing flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']}"
+            )
+            ms_folder = f"L{field['sas_id_calibrator2']}"
+            set_status_processing(
+                field["target_name"], "calibrator2", field["sas_id_target"]
+            )
+            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+            cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
+            if not os.path.isdir(outdir):
+                os.mkdir(outdir)
+            print(cmd)
+            with open(
+                f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator2']}.txt",
+                "w+",
+            ) as f_out, open(
+                f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator2']}_err.txt",
+                "w+",
+            ) as f_err:
+                proc = subprocess.run(
+                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                )
+                success = False
+                pattern = re.compile(r"Workflow.* stopped. Success: True")
+                if not proc.returncode:
+                    f_err.seek(0)
+                    if pattern.search(f_err.read()):
+                        success = True
+                if success:
+                    set_status_finished(
+                        field["target_name"], "calibrator2", field["sas_id_target"]
+                    )
+                else:
+                    raise RuntimeError
+        return field
 
     @task(trigger_rule=TriggerRule.ONE_DONE)
     def select_best_calibrator(result1, result2):
-        if result1 and result2:
+        if result1["sas_id_calibrator_final"]:
+            return result1
+        elif result2["sas_id_calibrator_final"]:
+            return result2
+        elif result1 and result2:
             print("Selecting between cal1 and cal2")
+            # Need actual selection logic here
             set_final_calibrator(
                 result1["target_name"],
                 result1["sas_id_target"],
@@ -311,9 +362,9 @@ def single_target_vlbi():
         elif (not result1) and result2:
             print("Only cal 2 succeeded, continuing with that")
             set_final_calibrator(
-                result1["target_name"],
-                result1["sas_id_target"],
-                result1["sas_id_calibrator2"],
+                result2["target_name"],
+                result2["sas_id_target"],
+                result2["sas_id_calibrator2"],
             )
             return result2
         else:
@@ -346,16 +397,21 @@ def single_target_vlbi():
             print(cmd)
             with open(
                 f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
-                "w",
+                "w+",
             ) as f_out, open(
                 f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                "w",
+                "w+",
             ) as f_err:
                 proc = subprocess.run(
                     cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                 )
+                success = False
+                pattern = re.compile(r"Workflow.* stopped. Success: True")
                 if not proc.returncode:
-                    return True
+                    f_err.seek(0)
+                    if pattern.search(f_err.read()):
+                        success = True
+                if success:
                     set_status_finished(
                         field["target_name"], "target", field["sas_id_target"]
                     )
