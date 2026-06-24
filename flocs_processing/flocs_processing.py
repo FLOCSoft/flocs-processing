@@ -155,10 +155,10 @@ def add_field(
         dbstr += ", sas_id_calibrator1, sas_id_calibrator2"
     dbstr += f", sas_id_target) values ('{field_name}', "
     if len(sas_id_calibrators) == 1:
-        dbstr += f"{sas_id_calibrators[0]}"
+        dbstr += f"'{sas_id_calibrators[0]}'"
     if len(sas_id_calibrators) == 2:
-        dbstr += f"{sas_id_calibrators[0]}, {sas_id_calibrators[1]}, "
-    dbstr += f"{sas_id_target})"
+        dbstr += f"'{sas_id_calibrators[0]}', '{sas_id_calibrators[1]}', "
+    dbstr += f"'{sas_id_target}')"
 
     cmd = ["sqlite3", dbname, dbstr]
     print(f"Adding field {field_name} to {table_name} via: {" ".join(cmd)}")
