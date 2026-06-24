@@ -15,14 +15,14 @@ from flocs_lta.lta_search import ObservationStager
 from stager_access import get_surls_requested, get_surls_online
 
 # Need to replace this with a config file
-TABLE_NAME = "processing_banados"
-DATABASE = "/project/lofarvlbi/Data/fsweijen/banados-high-z/banados_airflow.sqlite"
-SLURM_ACCOUNT = "lofarvlbi"
-SLURM_QUEUE = "normal"
-DATA_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z"
-OUTPUT_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z"
-PROCESSING_DIR = "/project/lofarvlbi/Data/fsweijen/banados-high-z/processing"
-NN_MODEL_CACHE = "/project/lofarvlbi/Software/fsweijen/nn_cache"
+TABLE_NAME = ""
+DATABASE = ""
+SLURM_ACCOUNT = ""
+SLURM_QUEUE = ""
+DATA_DIR = ""
+OUTPUT_DIR = ""
+PROCESSING_DIR = ""
+NN_MODEL_CACHE = ""
 
 
 @functools.total_ordering
@@ -115,7 +115,7 @@ def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.
 
 
 @dag(max_active_runs=1)
-def single_target_vlbi():
+def pilot_single_target():
     @task
     def get_unprocessed_target():
         field = dict(get_db_columns()[0])
@@ -445,7 +445,12 @@ def single_target_vlbi():
             delay_cat = os.path.join(outdir, "delay_calibrators.csv")
             image_cat = os.path.join(outdir, "image_catalogue.csv")
 
-            proc = subprocess.run("detect_bad_slurm_nodes.sh", shell=True, text=True, stdout=subprocess.PIPE)
+            proc = subprocess.run(
+                "detect_bad_slurm_nodes.sh",
+                shell=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            )
             bad_nodes = proc.stdout.strip()
             if bad_nodes:
                 print(f"Excluding the following bad nodes from scheduling: {bad_nodes}")
@@ -457,15 +462,21 @@ def single_target_vlbi():
             else:
                 # Extract the previous working directory
                 flocs_workdir = ""
-                print(f"Scanning log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir.")
-                with open(f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt") as f_out:
+                print(
+                    f"Scanning log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
+                )
+                with open(
+                    f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
+                ) as f_out:
                     for line in f_out.readlines():
                         print(line)
                         if "Running workflow with" in line:
                             flocs_workdir = line.split(" ")[-1].strip()
                             break
                 if not flocs_workdir:
-                    raise RuntimeError("Could not retrieve PILOT workdir. Flocs probably crashed before launching.")
+                    raise RuntimeError(
+                        "Could not retrieve PILOT workdir. Flocs probably crashed before launching."
+                    )
                 print(f"Resuming failed PILOT run in {flocs_workdir}")
                 cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} {target_ms_path}"
             if not os.path.isdir(outdir):
@@ -494,6 +505,10 @@ def single_target_vlbi():
                     )
                 else:
                     raise RuntimeError
+        return field
+
+    @task
+    def run_ddf_subtract(field):
         return field
 
     @task
@@ -556,10 +571,6 @@ def single_target_vlbi():
                     raise RuntimeError
         return field
 
-    @task
-    def run_ddf_pipeline(field):
-        return True
-
     proceed = check_fields()
     get_field = get_unprocessed_target()
     field = download_field(get_field)
@@ -570,9 +581,8 @@ def single_target_vlbi():
     linc_is_valid = validate_linc_target(result_targ)
     result_vlbi_delay = run_vlbi_delay(linc_is_valid)
     result_vlbi_dd = run_vlbi_ddcal(result_vlbi_delay)
-    # run_ddf_pipeline(vlbi_delay_is_valid)
 
     proceed >> get_field
 
 
-single_target_vlbi()
+pilot_single_target()
