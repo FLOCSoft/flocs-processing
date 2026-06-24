@@ -2,6 +2,15 @@
 
 This package aims to provide relatively simple end-to-end automatic processing of ILT HBA data. Where `flocs-runners` provides the interface to running pipelines, `flocs-processing` is the scaffolding to tie it together. Data reduction is coordinated via a dedicated SQLite database that holds information on which observations to process, which pipelines to run for them and all of the related statuses. Orchestration of all the pipelines is handled via Airflow through a DAG.
 
+## Folder setup
+Flocs-processing requires three folders to be setup:
+
+* A processing folder -- this is where data is stored while processing
+* A data folder -- this is where the input data is found
+* An output folder -- this is where finished pipeline outputs are copied to, and searched for in steps that depend on it.
+
+The expected naming directory structure for input data is `<data folder>/<field name>/{calibrator,target}`. Inside the calibrator and target folders, the observations should follow the usual `LXXXXXX` naming scheme. These **must** match the SAS IDs in the database for flocs to be able to find them.
+
 ## Database setup
 A database for processing is created via `flocs-processing create-database`. This will create an empty database with the necessary columns. Datasets to process can be added via `flocs-processing add-field`.
 
@@ -17,3 +26,4 @@ To start processing data, Airflow needs to be running. This will be delegated to
 Next start a screen or tmux session and run `airflow standalone` to start the Airflow instance. It will echo a user name and password on first start, but will also store the credentials in `${AIRFLOW_HOME}/simple_auth_manager_passwords.json.generated`. The Airflow instance will start on port 8080. You can access it via `localhost:8080` in your browser. If it is running on a remote cluster, you can set up a tunnel via e.g. `ssh -N -L 8080:localhost:8080 <remote>` to forward it to your local machine.
 
 Once `flocs-processing` is complete the processing loop will be automatic, but for now the user must trigger the DAG manually. On the "Dags" tab you should now see the flocs DAGs available. To manually trigger one, click on the name and on the subsequent page use the "Trigger" button in the top right.
+
