@@ -8,8 +8,9 @@ import sqlite3
 import subprocess
 import time
 
-from airflow.exceptions import AirflowFailException, AirflowSkipException
+from airflow.exceptions import AirflowFailException
 from airflow.sdk import dag, get_current_context, task
+from airflow.providers.standard.sensors.python import PythonSensor
 from airflow.task.trigger_rule import TriggerRule
 from flocs_lta.lta_search import ObservationStager
 from stager_access import get_surls_requested, get_surls_online
@@ -23,6 +24,23 @@ DATA_DIR = ""
 OUTPUT_DIR = ""
 PROCESSING_DIR = ""
 NN_MODEL_CACHE = ""
+DDF_CONFIG = ""
+
+NEEDS_MANUAL_APPROVAL_DELAY = True
+
+
+def get_approval(field, identifier, needs_approval):
+    if not needs_approval:
+        return True
+    with sqlite3.connect(DATABASE) as db:
+        db.row_factory = sqlite3.Row
+        cursor = db.cursor()
+        columns = f"sas_id_target,status_{identifier}"
+        field = cursor.execute(
+            f"select {columns} from {TABLE_NAME} where sas_id_target=='{field['sas_id_target']}'"
+        ).fetchall()
+        status = field[0][f"status_{identifier}"]
+    return status == PIPELINE_STATUS.finished.value
 
 
 @functools.total_ordering
@@ -30,7 +48,7 @@ class PIPELINE_STATUS(Enum):
     nothing = 0
     downloaded = 1
     finished = 2
-    running = 3
+    await_approval = 3
     processing = 98
     error = 99
 
@@ -65,6 +83,14 @@ def set_status_processing(name, identifier, target):
         cursor = db.cursor()
         cursor.execute(
             f"update {TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.processing.value} where target_name=='{name}' and sas_id_target=='{target}'"
+        )
+
+
+def set_status_await_approval(name, identifier, target):
+    with sqlite3.connect(DATABASE) as db:
+        cursor = db.cursor()
+        cursor.execute(
+            f"update {TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.await_approval.value} where target_name=='{name}' and sas_id_target=='{target}'"
         )
 
 
@@ -200,13 +226,16 @@ def pilot_widefield():
                     cmd = (
                         f"flocs-lta download --outdir {dl_path} {stage_id_calibrators}"
                     )
-                    with open(
-                        f"log_download_calibrators_{field['target_name']}.txt",
-                        "w+",
-                    ) as f_out, open(
-                        f"log_download_calibrators_{field['target_name']}.txt",
-                        "w+",
-                    ) as f_err:
+                    with (
+                        open(
+                            f"log_download_calibrators_{field['target_name']}.txt",
+                            "w+",
+                        ) as f_out,
+                        open(
+                            f"log_download_calibrators_{field['target_name']}.txt",
+                            "w+",
+                        ) as f_err,
+                    ):
                         proc = subprocess.run(
                             cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                         )
@@ -222,13 +251,16 @@ def pilot_widefield():
                 if target_staged and not target_downloaded:
                     dl_path = os.path.join(DATA_DIR, field["target_name"], "target")
                     cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
-                    with open(
-                        f"log_download_calibrators_{field['target_name']}.txt",
-                        "w+",
-                    ) as f_out, open(
-                        f"log_download_calibrators_{field['target_name']}.txt",
-                        "w+",
-                    ) as f_err:
+                    with (
+                        open(
+                            f"log_download_calibrators_{field['target_name']}.txt",
+                            "w+",
+                        ) as f_out,
+                        open(
+                            f"log_download_calibrators_{field['target_name']}.txt",
+                            "w+",
+                        ) as f_err,
+                    ):
                         proc = subprocess.run(
                             cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                         )
@@ -247,7 +279,7 @@ def pilot_widefield():
     @task
     def run_linc_calibrator1(field):
         if (field["status_calibrator1"] == PIPELINE_STATUS.finished) or (
-            field["status_calibrator1"] == PIPELINE_STATUS.running
+            field["status_calibrator1"] == PIPELINE_STATUS.processing
         ):
             print(
                 f"Flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']} already processed."
@@ -266,13 +298,16 @@ def pilot_widefield():
             if not os.path.isdir(outdir):
                 os.mkdir(outdir)
             print(cmd)
-            with open(
-                f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator1']}.txt",
-                "w+",
-            ) as f_out, open(
-                f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator1']}_err.txt",
-                "w+",
-            ) as f_err:
+            with (
+                open(
+                    f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator1']}.txt",
+                    "w+",
+                ) as f_out,
+                open(
+                    f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator1']}_err.txt",
+                    "w+",
+                ) as f_err,
+            ):
                 proc = subprocess.run(
                     cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                 )
@@ -293,7 +328,7 @@ def pilot_widefield():
     @task
     def run_linc_calibrator2(field):
         if (field["status_calibrator2"] == PIPELINE_STATUS.finished) or (
-            field["status_calibrator2"] == PIPELINE_STATUS.running
+            field["status_calibrator2"] == PIPELINE_STATUS.processing
         ):
             print(
                 f"Flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']} already processed."
@@ -312,13 +347,16 @@ def pilot_widefield():
             if not os.path.isdir(outdir):
                 os.mkdir(outdir)
             print(cmd)
-            with open(
-                f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator2']}.txt",
-                "w+",
-            ) as f_out, open(
-                f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator2']}_err.txt",
-                "w+",
-            ) as f_err:
+            with (
+                open(
+                    f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator2']}.txt",
+                    "w+",
+                ) as f_out,
+                open(
+                    f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator2']}_err.txt",
+                    "w+",
+                ) as f_err,
+            ):
                 proc = subprocess.run(
                     cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                 )
@@ -373,7 +411,7 @@ def pilot_widefield():
     @task
     def run_linc_target(field):
         if (field["status_target"] == PIPELINE_STATUS.finished) or (
-            field["status_target"] == PIPELINE_STATUS.running
+            field["status_target"] == PIPELINE_STATUS.processing
         ):
             return field
         else:
@@ -395,13 +433,16 @@ def pilot_widefield():
             if not os.path.isdir(outdir):
                 os.mkdir(outdir)
             print(cmd)
-            with open(
-                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
-                "w+",
-            ) as f_out, open(
-                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                "w+",
-            ) as f_err:
+            with (
+                open(
+                    f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
+                    "w+",
+                ) as f_out,
+                open(
+                    f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                    "w+",
+                ) as f_err,
+            ):
                 proc = subprocess.run(
                     cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                 )
@@ -426,7 +467,7 @@ def pilot_widefield():
     @task(retries=0, retry_delay=datetime.timedelta(seconds=5))
     def run_vlbi_delay(field):
         if (field["status_vlbi_delay"] == PIPELINE_STATUS.finished) or (
-            field["status_vlbi_delay"] == PIPELINE_STATUS.running
+            field["status_vlbi_delay"] == PIPELINE_STATUS.processing
         ):
             return field
         else:
@@ -482,13 +523,16 @@ def pilot_widefield():
             if not os.path.isdir(outdir):
                 os.mkdir(outdir)
             print(cmd)
-            with open(
-                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
-                "w+",
-            ) as f_out, open(
-                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                "w+",
-            ) as f_err:
+            with (
+                open(
+                    f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+                    "w+",
+                ) as f_out,
+                open(
+                    f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                    "w+",
+                ) as f_err,
+            ):
                 proc = subprocess.run(
                     cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                 )
@@ -500,9 +544,14 @@ def pilot_widefield():
                         success = True
 
                 if success:
-                    set_status_finished(
-                        field["target_name"], "vlbi_delay", field["sas_id_target"]
-                    )
+                    if NEEDS_MANUAL_APPROVAL_DELAY:
+                        set_status_await_approval(
+                            field["target_name"], "vlbi_delay", field["sas_id_target"]
+                        )
+                    else:
+                        set_status_finished(
+                            field["target_name"], "vlbi_delay", field["sas_id_target"]
+                        )
                 else:
                     raise RuntimeError
         return field
@@ -510,15 +559,59 @@ def pilot_widefield():
     @task
     def run_ddf_pipeline(field):
         if (field["status_ddf"] == PIPELINE_STATUS.finished) or (
-            field["status_ddf"] == PIPELINE_STATUS.running
+            field["status_ddf"] == PIPELINE_STATUS.processing
         ):
             return field
         else:
             print(
                 f"Starting ddf-pipeline for {field['target_name']} {field['sas_id_target']}"
             )
-            return field
+            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+            target_path = get_most_recent_run(
+                outdir, field["sas_id_target"], "LINC_target"
+            )
+            target_ms_path = target_path / "results_LINC_target" / "results"
 
+            cmd = f"flocs-run ddf-pipeline --scheduler slurm --slurm-time 72:00:00 --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {OUTPUT_DIR} --config-file {DDF_CONFIG} {target_ms_path}"
+            with (
+                open(
+                    f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}.txt",
+                    "w+",
+                ) as f_out,
+                open(
+                    f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                    "w+",
+                ) as f_err,
+            ):
+                proc = subprocess.run(
+                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                )
+                jobid = None
+                if not proc.returncode:
+                    f_out.seek(0)
+                    for line in f_out.readlines():
+                        if "Submitted batch job" in line:
+                            jobid = line.strip().split()[-1]
+                else:
+                    raise RuntimeError("Failed to submit job.")
+
+                if not jobid:
+                    raise RuntimeError("Failed to retrieve job id")
+                else:
+                    while True:
+                        poll_cmd = f"sacct -X -j {jobid} --format=State --noheader"
+                        status = subprocess.run(
+                            poll_cmd, shell=True, text=True, capture_output=True
+                        ).stdout.strip()
+                        if status == "RUNNING":
+                            time.sleep(60)
+                        elif status == "COMPLETED":
+                            break
+                        elif status == "FAILED":
+                            raise RuntimeError(
+                                f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
+                            )
+            return field
 
     @task
     def run_ddf_subtract(field):
@@ -527,7 +620,7 @@ def pilot_widefield():
     @task
     def run_vlbi_ddcal(field):
         if (field["status_vlbi_dd"] == PIPELINE_STATUS.finished) or (
-            field["status_vlbi_dd"] == PIPELINE_STATUS.running
+            field["status_vlbi_dd"] == PIPELINE_STATUS.processing
         ):
             return field
         else:
@@ -559,13 +652,16 @@ def pilot_widefield():
             if not os.path.isdir(outdir):
                 os.mkdir(outdir)
             print(cmd)
-            with open(
-                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
-                "w+",
-            ) as f_out, open(
-                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                "w+",
-            ) as f_err:
+            with (
+                open(
+                    f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+                    "w+",
+                ) as f_out,
+                open(
+                    f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                    "w+",
+                ) as f_err,
+            ):
                 proc = subprocess.run(
                     cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                 )
@@ -593,12 +689,22 @@ def pilot_widefield():
     result_targ = run_linc_target(best_cal)
     linc_is_valid = validate_linc_target(result_targ)
     result_vlbi_delay = run_vlbi_delay(linc_is_valid)
-    result_ddf = run_ddf_pipeline(result_vlbi_delay)
-    result_ddf_subtract = run_ddf_subtract(result_ddf)
-    result_vlbi_dd = run_vlbi_ddcal(result_vlbi_delay)
 
     proceed >> get_field
-    result_ddf >> result_ddf_subtract >> result_vlbi_dd
+    await_approval_delay = PythonSensor(
+        task_id="approve_delay",
+        python_callable=get_approval,
+        poke_interval=60,
+        timeout=86400 * 7,
+        mode="poke",
+        op_args=[result_vlbi_delay, "vlbi_delay", NEEDS_MANUAL_APPROVAL_DELAY],
+    )
+    # result_ddf = run_ddf_pipeline(await_approval_delay)
+    result_ddf = run_ddf_pipeline(result_vlbi_delay)
+
+    result_ddf_subtract = run_ddf_subtract(result_ddf)
+    result_vlbi_dd = run_vlbi_ddcal(result_ddf_subtract)
+    await_approval_delay >> result_ddf >> result_ddf_subtract >> result_vlbi_dd
 
 
 pilot_widefield()
