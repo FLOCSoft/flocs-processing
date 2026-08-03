@@ -216,11 +216,11 @@ def pilot_widefield():
                     "ALL",
                     field["sas_id_target"],
                     None,
-                    120e6,
-                    168e6,
+                    120,
+                    168,
                 )
                 if stage_calibrators:
-                    stager.find_nearest_calibrators(2, 120e6, 168e6)
+                    stager.find_nearest_calibrators(2, 120, 168)
                     stage_id_calibrators = stager.stage_calibrators()
                 if stage_target:
                     stage_id_target = stager.stage_target()
