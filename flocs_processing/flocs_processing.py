@@ -18,6 +18,12 @@ import time
 
 app = cyclopts.App()
 
+# At some point we need to spawn these instead of running standalone
+# tmux new-session -d -s airflow-api-server "bash -c 'source $HOME/source_airflow.sh && airflow api-server; exec bash'"
+# tmux new-session -d -s airflow-scheduler "bash -c 'source $HOME/source_airflow.sh && airflow scheduler; exec bash'"
+# tmux new-session -d -s airflow-dag-processor "bash -c 'source $HOME/source_airflow.sh && airflow dag-processor; exec bash'"
+# tmux new-session -d -s airflow-triggerer "bash -c 'source $HOME/source_airflow.sh && airflow triggerer; exec bash'"
+
 
 @functools.total_ordering
 class PIPELINE(Enum):
@@ -112,9 +118,7 @@ def create_database(
         dbstr += f", status_vlbi_ddf_subtract smallint default {PIPELINE_STATUS.nothing.value}"
         dbstr += f", status_vlbi_intermediate_img smallint default {PIPELINE_STATUS.nothing.value}"
         dbstr += f", status_vlbi_facet_subtract smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += (
-            f", status_vlbi_facet_image smallint default {PIPELINE_STATUS.nothing.value}"
-        )
+        dbstr += f", status_vlbi_facet_imaging smallint default {PIPELINE_STATUS.nothing.value}"
     if "vlbi-delay-single-target" in pipelines:
         dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
         dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
