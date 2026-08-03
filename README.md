@@ -41,8 +41,8 @@ For proper deployment, it is recommended by the Airflow docs to not use `standal
 
 ```
 tmux new-session -d -s airflow-api-server "bash -c 'source $HOME/source_airflow.sh && airflow api-server; exec bash'"
-tmux new-session -d -s airflow-triggerer "bash -c 'source $HOME/source_airflow.sh && airflow api-server; exec bash'"
-tmux new-session -d -s airflow-dag-processor "bash -c 'source $HOME/source_airflow.sh && airflow api-server; exec bash'"
+tmux new-session -d -s airflow-triggerer "bash -c 'source $HOME/source_airflow.sh && airflow triggerer; exec bash'"
+tmux new-session -d -s airflow-dag-processor "bash -c 'source $HOME/source_airflow.sh && airflow dag-processor; exec bash'"
 tmux new-session -d -s airflow-scheduler "bash -c 'source $HOME/source_airflow.sh && airflow scheduler; exec bash'"
 ```
 
