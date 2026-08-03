@@ -109,10 +109,11 @@ def create_database(
     if "vlbi-delay-widefield" in pipelines:
         dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
         dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
+        dbstr += f", status_vlbi_ddf_subtract smallint default {PIPELINE_STATUS.nothing.value}"
         dbstr += f", status_vlbi_intermediate_img smallint default {PIPELINE_STATUS.nothing.value}"
         dbstr += f", status_vlbi_facet_subtract smallint default {PIPELINE_STATUS.nothing.value}"
         dbstr += (
-            f", status_vlbi_facet_img smallint default {PIPELINE_STATUS.nothing.value}"
+            f", status_vlbi_facet_image smallint default {PIPELINE_STATUS.nothing.value}"
         )
     if "vlbi-delay-single-target" in pipelines:
         dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
