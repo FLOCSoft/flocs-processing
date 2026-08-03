@@ -1078,6 +1078,102 @@ def pilot_widefield():
         else:
             raise RuntimeError("No averaged MSes for ddf-pipeline found.")
 
+    @task
+    def run_vlbi_image_intermediate(field):
+        field = dict(get_db_columns(field["sas_id_target"])[0])
+        if (field["status_vlbi_intermediate_img"] == PIPELINE_STATUS.finished) or (
+            field["status_vlbi_intermediate_img"] == PIPELINE_STATUS.processing
+        ):
+            return field
+        else:
+            print(
+                f"Processing ILT intermediate resolution imaging for {field['target_name']} {field['sas_id_target']}"
+            )
+            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+            target_path = get_most_recent_run(
+                outdir, field["sas_id_target"], "VLBI_process-ddf"
+            )
+            target_ms_path = target_path / "results_VLBI_process-ddf"
+            print(f"Using subtracted data at: {target_path}")
+
+            dd_sols_path = get_most_recent_run(
+                outdir, field["sas_id_target"], "VLBI_dd-calibration"
+            )
+            dd_sols = dd_sols_path / "results_VLBI_dd-calibration" / "merged.h5"
+            print(f"Using dd solutions at: {target_path}")
+
+            if not os.path.isfile(dd_sols):
+                raise AirflowFailException(f"{dd_sols} not found.")
+
+            set_status_processing(
+                field["target_name"], "vlbi_intermediate_img", field["sas_id_target"]
+            )
+
+            context = get_current_context()
+            if context["ti"].try_number == 1:
+                cmd = f"flocs-run vlbi image-intermediate-resolution --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --dd-solutions {dd_sols} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
+            else:
+                if field["status_vlbi_intermediate_img"] == PIPELINE_STATUS.downloaded:
+                    # This way we can force a clean restart in the database.
+                    cmd = f"flocs-run vlbi image-intermediate-resolution --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --dd-solutions {dd_sols} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
+                else:
+                    # Extract the previous working directory
+                    flocs_workdir = ""
+                    print(
+                        f"Scanning log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
+                    )
+                    with open(
+                        f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt"
+                    ) as f_out:
+                        for line in f_out.readlines():
+                            print(line)
+                            if "Running workflow with" in line:
+                                flocs_workdir = line.split(" ")[-1].strip()
+                                break
+                    if not flocs_workdir:
+                        raise RuntimeError(
+                            "Could not retrieve PILOT workdir. Flocs probably crashed before launching."
+                        )
+                    print(f"Resuming failed PILOT run in {flocs_workdir}")
+                    cmd = f"flocs-run vlbi image-intermediate-resolution --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --rundir {PROCESSING_DIR} --outdir {outdir} --dd-solutions {dd_sols} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
+            if not os.path.isdir(outdir):
+                os.mkdir(outdir)
+            print(cmd)
+            with (
+                open(
+                    f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt",
+                    "w+",
+                ) as f_out,
+                open(
+                    f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                    "w+",
+                ) as f_err,
+            ):
+                proc = subprocess.run(
+                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                )
+                success = False
+                pattern = re.compile(r"Workflow.* stopped. Success: True")
+                if not proc.returncode:
+                    f_err.seek(0)
+                    if pattern.search(f_err.read()):
+                        success = True
+                if success:
+                    set_status_finished(
+                        field["target_name"],
+                        "vlbi_intermediate_img",
+                        field["sas_id_target"],
+                    )
+                    set_field_finished(field["target_name"], field["sas_id_target"])
+                else:
+                    set_status_failed(
+                        field["target_name"],
+                        "vlbi_intermediate_img",
+                        field["sas_id_target"],
+                    )
+                    raise RuntimeError
+        return field
+
     proceed = check_fields()
     get_field = get_unprocessed_target()
     field = download_field(get_field)
@@ -1102,6 +1198,7 @@ def pilot_widefield():
     result_prepare_ddf_subtract = prepare_ddf_subtract(result_ddf)
     result_ddf_subtract = run_ddf_subtract(result_prepare_ddf_subtract)
     result_vlbi_dd = run_vlbi_ddcal(result_ddf_subtract)
+    result_vlbi_interm_img = run_vlbi_image_intermediate(result_vlbi_dd)
 
     (
         await_approval_delay
