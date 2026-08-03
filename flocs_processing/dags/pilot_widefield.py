@@ -1286,6 +1286,100 @@ def pilot_widefield():
                     raise RuntimeError
         return field
 
+    @task
+    def run_vlbi_facet_imaging(field):
+        field = dict(get_db_columns(field["sas_id_target"])[0])
+        if (field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished) or (
+            field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.processing
+        ):
+            return field
+        else:
+            print(
+                f"Processing ILT facet imaging for {field['target_name']} {field['sas_id_target']}"
+            )
+            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+            target_path = get_most_recent_run(
+                outdir, field["sas_id_target"], "VLBI_facet_subtract"
+            )
+            target_ms_path = target_path / "results_VLBI_facet_subtract"
+            print(f"Using subtracted data at: {target_path}")
+
+            facet_mses = list(target_ms_path.glob("facet*.ms"))
+
+            if not facet_mses:
+                raise AirflowFailException(
+                    "No suitable intermediate resolution model images found."
+                )
+
+            set_status_processing(
+                field["target_name"], "vlbi_facet_imaging", field["sas_id_target"]
+            )
+
+            context = get_current_context()
+            if context["ti"].try_number == 1:
+                cmd = f"flocs-run vlbi facet-imaging --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --resolution 0.3asec --pixel-scale 0.1 --ms-suffix .ms {target_ms_path}"
+            else:
+                if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.downloaded:
+                    # This way we can force a clean restart in the database.
+                    cmd = f"flocs-run vlbi facet-imaging --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --resolution 0.3asec --pixel-scale 0.1 --ms-suffix .ms {target_ms_path}"
+                else:
+                    # Extract the previous working directory
+                    flocs_workdir = ""
+                    print(
+                        f"Scanning log_VLBI_facet_imaging_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
+                    )
+                    with open(
+                        f"log_VLBI_facet_imaging_{field['target_name']}_{field['sas_id_target']}.txt"
+                    ) as f_out:
+                        for line in f_out.readlines():
+                            print(line)
+                            if "Running workflow with" in line:
+                                flocs_workdir = line.split(" ")[-1].strip()
+                                break
+                    if not flocs_workdir:
+                        raise RuntimeError(
+                            "Could not retrieve PILOT workdir. Flocs probably crashed before launching."
+                        )
+                    print(f"Resuming failed PILOT run in {flocs_workdir}")
+                    cmd = f"flocs-run vlbi facet-imaging --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --resolution 0.3asec --pixel-scale 0.1 --ms-suffix .ms {target_ms_path}"
+            if not os.path.isdir(outdir):
+                os.mkdir(outdir)
+            print(cmd)
+            with (
+                open(
+                    f"log_VLBI_facet_imaging_{field['target_name']}_{field['sas_id_target']}.txt",
+                    "w+",
+                ) as f_out,
+                open(
+                    f"log_VLBI_facet_imaging_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                    "w+",
+                ) as f_err,
+            ):
+                proc = subprocess.run(
+                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                )
+                success = False
+                pattern = re.compile(r"Workflow.* stopped. Success: True")
+                if not proc.returncode:
+                    f_err.seek(0)
+                    if pattern.search(f_err.read()):
+                        success = True
+                if success:
+                    set_status_finished(
+                        field["target_name"],
+                        "vlbi_facet_imaging",
+                        field["sas_id_target"],
+                    )
+                    set_field_finished(field["target_name"], field["sas_id_target"])
+                else:
+                    set_status_failed(
+                        field["target_name"],
+                        "vlbi_facet_imaging",
+                        field["sas_id_target"],
+                    )
+                    raise RuntimeError
+        return field
+
     proceed = check_fields()
     get_field = get_unprocessed_target()
     field = download_field(get_field)
@@ -1311,6 +1405,8 @@ def pilot_widefield():
     result_ddf_subtract = run_ddf_subtract(result_prepare_ddf_subtract)
     result_vlbi_dd = run_vlbi_ddcal(result_ddf_subtract)
     result_vlbi_interm_img = run_vlbi_image_intermediate(result_vlbi_dd)
+    result_vlbi_facet_subtract = run_vlbi_facet_subtract(result_vlbi_interm_img)
+    result_vlbi_facet_img = run_vlbi_facet_imaging(result_vlbi_facet_subtract)
 
     (
         await_approval_delay
