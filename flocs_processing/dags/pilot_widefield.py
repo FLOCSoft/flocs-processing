@@ -481,9 +481,8 @@ def pilot_widefield():
 
     @task(retries=0, retry_delay=datetime.timedelta(seconds=5))
     def run_vlbi_delay(field):
-        if (
-            (field["status_vlbi_delay"] == PIPELINE_STATUS.finished)
-            or (field["status_vlbi_delay"] == PIPELINE_STATUS.await_approval)
+        if (field["status_vlbi_delay"] == PIPELINE_STATUS.finished) or (
+            field["status_vlbi_delay"] == PIPELINE_STATUS.await_approval
         ):
             return field
         else:
@@ -501,6 +500,34 @@ def pilot_widefield():
 
             delay_cat = os.path.join(outdir, "delay_calibrators.csv")
             image_cat = os.path.join(outdir, "image_catalogue.csv")
+
+            if not os.path.isfile(delay_cat):
+                ms = list(target_ms_path.glob("*.dp3concat"))[0]
+                cmd = f"lofar-vlbi-plot --MS {ms}"
+                with (
+                    open(
+                        f"log_plot_field_{field['target_name']}_{field['sas_id_target']}.txt",
+                        "w+",
+                    ) as f_out,
+                    open(
+                        f"log_plot_field_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                        "w+",
+                    ) as f_err,
+                ):
+                    proc = subprocess.run(
+                        cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                    )
+                    if not proc.returncode:
+                        raise RuntimeError(
+                            "Failed to download necessary products for delay calibration."
+                        )
+            delay_cat = os.path.join(outdir, "delay_calibrators.csv")
+            image_cat = os.path.join(outdir, "image_catalogue.csv")
+
+            if not os.path.isfile(delay_cat):
+                raise RuntimeError("Delay calibrator catalogue is missing or invalid.")
+            if not os.path.isfile(image_cat):
+                raise RuntimeError("Image source catalogue is missing or invalid.")
 
             proc = subprocess.run(
                 "detect_bad_slurm_nodes.sh",
