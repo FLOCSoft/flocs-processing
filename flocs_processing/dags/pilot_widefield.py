@@ -173,7 +173,6 @@ def pilot_widefield():
         if field["downloaded"]:
             return field
         else:
-            has_cal1 = False
             stage_calibrators = False
             num_downloaded_calib1 = 0
             num_downloaded_calib2 = 0
@@ -199,21 +198,18 @@ def pilot_widefield():
                     DATA_DIR, field["target_name"], "calibrator", ms_folder
                 )
                 if os.path.exists(cal1_full_path):
-                    has_cal1 = True
                     num_downloaded_calib1 = len(
                         list(pathlib.Path(cal1_full_path).glob("*.MS"))
                     )
                 else:
                     stage_calibrators = True
 
-            has_cal2 = False
             if field["sas_id_calibrator2"]:
                 ms_folder = f"L{field['sas_id_calibrator2']}"
                 cal2_full_path = os.path.join(
                     DATA_DIR, field["target_name"], "calibrator", ms_folder
                 )
                 if os.path.exists(cal2_full_path):
-                    has_cal2 = True
                     num_downloaded_calib2 = len(
                         list(pathlib.Path(cal2_full_path).glob("*.MS"))
                     )
@@ -265,35 +261,36 @@ def pilot_widefield():
 
             calibrator_staged = False
             target_staged = False
-            calibrator_downloaded = has_cal1 or has_cal2
+            calibrator_downloaded = not stage_calibrators
             target_downloaded = not stage_target
             while True:
-                if len(get_surls_online(stage_id_calibrators)) == len(
-                    get_surls_requested(stage_id_calibrators)
-                ):
-                    calibrator_staged = True
-                if calibrator_staged and not calibrator_downloaded:
-                    dl_path = os.path.join(DATA_DIR, field["target_name"], "calibrator")
-                    cmd = (
-                        f"flocs-lta download --outdir {dl_path} {stage_id_calibrators}"
-                    )
-                    with (
-                        open(
-                            f"log_download_calibrators_{field['target_name']}.txt",
-                            "w+",
-                        ) as f_out,
-                        open(
-                            f"log_download_calibrators_{field['target_name']}_err.txt",
-                            "w+",
-                        ) as f_err,
+                if not calibrator_downloaded:
+                    if len(get_surls_online(stage_id_calibrators)) == len(
+                        get_surls_requested(stage_id_calibrators)
                     ):
-                        proc = subprocess.run(
-                            cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                        calibrator_staged = True
+                    if calibrator_staged and not calibrator_downloaded:
+                        dl_path = os.path.join(
+                            DATA_DIR, field["target_name"], "calibrator"
                         )
-                        if not proc.returncode:
-                            calibrator_downloaded = True
-                        else:
-                            raise RuntimeError
+                        cmd = f"flocs-lta download --outdir {dl_path} {stage_id_calibrators}"
+                        with (
+                            open(
+                                f"log_download_calibrators_{field['target_name']}.txt",
+                                "w+",
+                            ) as f_out,
+                            open(
+                                f"log_download_calibrators_{field['target_name']}_err.txt",
+                                "w+",
+                            ) as f_err,
+                        ):
+                            proc = subprocess.run(
+                                cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                            )
+                            if not proc.returncode:
+                                calibrator_downloaded = True
+                            else:
+                                raise RuntimeError
 
                 if not target_downloaded:
                     if len(get_surls_online(stage_id_target)) == len(
