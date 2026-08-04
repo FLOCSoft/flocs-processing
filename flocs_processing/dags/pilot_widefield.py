@@ -175,6 +175,24 @@ def pilot_widefield():
         else:
             has_cal1 = False
             stage_calibrators = False
+            num_downloaded_calib1 = 0
+            num_downloaded_calib2 = 0
+            num_staged_calib = 0
+            num_staged_targ = 0
+            if os.path.exists("srms_{field['sas_id_target']}_calibrators.txt"):
+                out = subprocess.check_output(
+                    "wc -l srms_{field['sas_id_target']}_calibrators.txt | cut -f 1 -d ' '",
+                    text=True,
+                )
+                num_staged_calib = int(out.strip())
+
+            if os.path.exists("srms_{field['sas_id_target']}.txt"):
+                out = subprocess.check_output(
+                    "wc -l srms_{field['sas_id_target']}.txt | cut -f 1 -d ' '",
+                    text=True,
+                )
+                num_staged_targ = int(out.strip())
+
             if field["sas_id_calibrator1"]:
                 ms_folder = f"L{field['sas_id_calibrator1']}"
                 cal1_full_path = os.path.join(
@@ -182,6 +200,9 @@ def pilot_widefield():
                 )
                 if os.path.exists(cal1_full_path):
                     has_cal1 = True
+                    num_downloaded_calib1 = len(
+                        list(pathlib.Path(cal1_full_path).glob("*.MS"))
+                    )
                 else:
                     stage_calibrators = True
 
@@ -193,25 +214,29 @@ def pilot_widefield():
                 )
                 if os.path.exists(cal2_full_path):
                     has_cal2 = True
+                    num_downloaded_calib2 = len(
+                        list(pathlib.Path(cal2_full_path).glob("*.MS"))
+                    )
                 else:
                     stage_calibrators = True
 
+            num_downloaded_calib = num_downloaded_calib1 + num_downloaded_calib2
+            if num_downloaded_calib == num_staged_calib:
+                stage_calibrators = False
+            else:
+                stage_calibrators = True
+
+            stage_target = False
             if field["sas_id_target"]:
                 ms_folder = f"L{field['sas_id_target']}"
                 target_full_path = os.path.join(
                     DATA_DIR, field["target_name"], "target", ms_folder
                 )
                 if os.path.exists(target_full_path):
-                    out = subprocess.check_output(
-                        "wc -l srms_{field['sas_id_target']}.txt | cut -f 1 -d ' '",
-                        text=True,
-                    )
-                    num_staged = int(out.strip())
-
-                    num_downloaded = len(
+                    num_downloaded_targ = len(
                         list(pathlib.Path(target_full_path).glob("*.MS"))
                     )
-                    if num_downloaded == num_staged:
+                    if num_downloaded_targ == num_staged_targ:
                         stage_target = False
                     else:
                         stage_target = True
@@ -1444,7 +1469,7 @@ def pilot_widefield():
     result_vlbi_dd = run_vlbi_ddcal(result_ddf_subtract)
     result_vlbi_interm_img = run_vlbi_image_intermediate(result_vlbi_dd)
     result_vlbi_facet_subtract = run_vlbi_facet_subtract(result_vlbi_interm_img)
-    result_vlbi_facet_img = run_vlbi_facet_imaging(result_vlbi_facet_subtract)
+    _result_vlbi_facet_img = run_vlbi_facet_imaging(result_vlbi_facet_subtract)
 
     (
         await_approval_delay
