@@ -195,15 +195,26 @@ def pilot_widefield():
                     has_cal2 = True
                 else:
                     stage_calibrators = True
+
             if field["sas_id_target"]:
                 ms_folder = f"L{field['sas_id_target']}"
                 target_full_path = os.path.join(
                     DATA_DIR, field["target_name"], "target", ms_folder
                 )
                 if os.path.exists(target_full_path):
-                    stage_target = False
-                else:
-                    stage_target = True
+                    out = subprocess.check_output(
+                        "wc -l srms_{field['sas_id_target']}.txt | cut -f 1 -d ' '",
+                        text=True,
+                    )
+                    num_staged = int(out.strip())
+
+                    num_downloaded = len(
+                        list(pathlib.Path(target_full_path).glob("*.MS"))
+                    )
+                    if num_downloaded == num_staged:
+                        stage_target = False
+                    else:
+                        stage_target = True
             else:
                 raise AirflowFailException(
                     f"No target SAS ID in database for field {field['target_name']}"
@@ -247,7 +258,7 @@ def pilot_widefield():
                             "w+",
                         ) as f_out,
                         open(
-                            f"log_download_calibrators_{field['target_name']}.txt",
+                            f"log_download_calibrators_{field['target_name']}_err.txt",
                             "w+",
                         ) as f_err,
                     ):
@@ -259,34 +270,35 @@ def pilot_widefield():
                         else:
                             raise RuntimeError
 
-                if len(get_surls_online(stage_id_target)) == len(
-                    get_surls_requested(stage_id_target)
-                ):
-                    target_staged = True
-                if target_staged and not target_downloaded:
-                    dl_path = os.path.join(DATA_DIR, field["target_name"], "target")
-                    cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
-                    with (
-                        open(
-                            f"log_download_calibrators_{field['target_name']}.txt",
-                            "w+",
-                        ) as f_out,
-                        open(
-                            f"log_download_calibrators_{field['target_name']}.txt",
-                            "w+",
-                        ) as f_err,
+                if not target_downloaded:
+                    if len(get_surls_online(stage_id_target)) == len(
+                        get_surls_requested(stage_id_target)
                     ):
-                        proc = subprocess.run(
-                            cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                        )
-                        if not proc.returncode:
-                            set_status_downloaded(
-                                field["target_name"],
-                                field["sas_id_target"],
+                        target_staged = True
+                    if target_staged and not target_downloaded:
+                        dl_path = os.path.join(DATA_DIR, field["target_name"], "target")
+                        cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
+                        with (
+                            open(
+                                f"log_download_target_{field['target_name']}.txt",
+                                "w+",
+                            ) as f_out,
+                            open(
+                                f"log_download_target_{field['target_name']}_err.txt",
+                                "w+",
+                            ) as f_err,
+                        ):
+                            proc = subprocess.run(
+                                cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                             )
-                            target_downloaded = True
-                        else:
-                            raise RuntimeError
+                            if not proc.returncode:
+                                set_status_downloaded(
+                                    field["target_name"],
+                                    field["sas_id_target"],
+                                )
+                                target_downloaded = True
+                            else:
+                                raise RuntimeError
                 if calibrator_downloaded and target_downloaded:
                     break
                 time.sleep(60)
