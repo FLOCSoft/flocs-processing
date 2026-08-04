@@ -36,8 +36,17 @@ export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="sqlite:///$AIRFLOW_HOME/airflow.db"
 export AIRFLOW__LOGGING__BASE_LOG_FOLDER=$AIRFLOW_HOME/logs
 ```
 
-For a small test, you can run `airflow standalone` to start the Airflow instance for a small test. 
-For proper deployment, it is recommended by the Airflow docs to not use `standalone`. To start the necessary Airflow services, execute them like follows:
+For a small test, you can run `airflow standalone` to start the Airflow instance for a small test.  For proper deployment, it is recommended by the Airflow docs to not use `standalone`. First we'll set up a persistent JWT secret for authentication purpose.
+
+```
+mkdir -p "$HOME/.config/airflow"
+chmod 700 "$HOME/.config/airflow"
+openssl rand -hex 32 > "$HOME/.config/airflow/jwt_secret"
+chmod 600 "$HOME/.config/airflow/jwt_secret"
+export AIRFLOW__API_AUTH__JWT_SECRET="$(cat "$HOME/.config/airflow/jwt_secret")"
+```
+
+Finally, to start the necessary Airflow services, execute them like follows:
 
 ```
 tmux new-session -d -s airflow-api-server "bash -c 'source $HOME/source_airflow.sh && airflow api-server; exec bash'"
