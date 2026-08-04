@@ -159,7 +159,13 @@ def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.
 def pilot_widefield():
     @task
     def get_unprocessed_target():
-        field = dict(get_db_columns()[0])
+        for row in get_db_columns():
+            status_keys = filter(lambda x: x.startswith("status_"), row.keys())
+            for key in status_keys:
+                if row[key] == PIPELINE_STATUS.processing.value:
+                    continue
+                # Only select a field if nothing is processing it.
+                field = dict(row)
         print(field["target_name"])
         return field
 
