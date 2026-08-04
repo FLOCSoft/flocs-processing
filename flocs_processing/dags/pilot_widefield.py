@@ -179,7 +179,7 @@ def pilot_widefield():
             num_staged_calib = 0
             num_staged_targ = 0
             if os.path.exists("srms_{field['sas_id_target']}_calibrators.txt"):
-                print("Found srm file; ounting calibrator SRMs.")
+                print("Found srm file; counting calibrator SRMs.")
                 out = subprocess.check_output(
                     "wc -l srms_{field['sas_id_target']}_calibrators.txt | cut -f 1 -d ' '",
                     text=True,
@@ -242,12 +242,12 @@ def pilot_widefield():
                     )
                     if num_downloaded_targ == num_staged_targ:
                         print(
-                            f"Number of staged target MSes ({num_staged_calib}) equals number of downloaded MSes ({num_downloaded_calib}); not staging target again."
+                            f"Number of staged target MSes ({num_staged_targ}) equals number of downloaded MSes ({num_downloaded_targ}); not staging target again."
                         )
                         stage_target = False
                     else:
                         print(
-                            f"Number of staged target MSes ({num_staged_calib}) does NOT number of downloaded MSes ({num_downloaded_calib}); staging target again and resuming download."
+                            f"Number of staged target MSes ({num_staged_targ}) does NOT equal number of downloaded MSes ({num_downloaded_targ}); staging target again and resuming download."
                         )
                         stage_target = True
             else:
