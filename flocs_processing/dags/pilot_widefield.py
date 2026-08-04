@@ -179,6 +179,7 @@ def pilot_widefield():
             num_staged_calib = 0
             num_staged_targ = 0
             if os.path.exists("srms_{field['sas_id_target']}_calibrators.txt"):
+                print("Found srm file; ounting calibrator SRMs.")
                 out = subprocess.check_output(
                     "wc -l srms_{field['sas_id_target']}_calibrators.txt | cut -f 1 -d ' '",
                     text=True,
@@ -186,6 +187,7 @@ def pilot_widefield():
                 num_staged_calib = int(out.strip())
 
             if os.path.exists("srms_{field['sas_id_target']}.txt"):
+                print("Found srm file; counting target SRMs.")
                 out = subprocess.check_output(
                     "wc -l srms_{field['sas_id_target']}.txt | cut -f 1 -d ' '",
                     text=True,
@@ -218,8 +220,14 @@ def pilot_widefield():
 
             num_downloaded_calib = num_downloaded_calib1 + num_downloaded_calib2
             if num_downloaded_calib == num_staged_calib:
+                print(
+                    f"Number of staged calibrator MSes ({num_staged_calib}) equals number of downloaded MSes ({num_downloaded_calib}); not staging calibrators again."
+                )
                 stage_calibrators = False
             else:
+                print(
+                    f"Number of staged calibrator MSes ({num_staged_calib}) does NOT equal number of downloaded MSes ({num_downloaded_calib}); restaging calibrators and resuming download."
+                )
                 stage_calibrators = True
 
             stage_target = False
@@ -233,8 +241,14 @@ def pilot_widefield():
                         list(pathlib.Path(target_full_path).glob("*.MS"))
                     )
                     if num_downloaded_targ == num_staged_targ:
+                        print(
+                            f"Number of staged target MSes ({num_staged_calib}) equals number of downloaded MSes ({num_downloaded_calib}); not staging target again."
+                        )
                         stage_target = False
                     else:
+                        print(
+                            f"Number of staged target MSes ({num_staged_calib}) does NOT number of downloaded MSes ({num_downloaded_calib}); staging target again and resuming download."
+                        )
                         stage_target = True
             else:
                 raise AirflowFailException(
