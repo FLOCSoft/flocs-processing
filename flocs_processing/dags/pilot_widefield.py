@@ -178,18 +178,18 @@ def pilot_widefield():
             num_downloaded_calib2 = 0
             num_staged_calib = 0
             num_staged_targ = 0
-            if os.path.exists("srms_{field['sas_id_target']}_calibrators.txt"):
+            if os.path.exists(f"srms_{field['sas_id_target']}_calibrators.txt"):
                 print("Found srm file; counting calibrator SRMs.")
                 out = subprocess.check_output(
-                    "wc -l srms_{field['sas_id_target']}_calibrators.txt | cut -f 1 -d ' '",
+                    f"wc -l srms_{field['sas_id_target']}_calibrators.txt | cut -f 1 -d ' '",
                     text=True,
                 )
                 num_staged_calib = int(out.strip())
 
-            if os.path.exists("srms_{field['sas_id_target']}.txt"):
+            if os.path.exists(f"srms_{field['sas_id_target']}.txt"):
                 print("Found srm file; counting target SRMs.")
                 out = subprocess.check_output(
-                    "wc -l srms_{field['sas_id_target']}.txt | cut -f 1 -d ' '",
+                    f"wc -l srms_{field['sas_id_target']}.txt | cut -f 1 -d ' '",
                     text=True,
                 )
                 num_staged_targ = int(out.strip())
