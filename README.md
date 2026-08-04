@@ -46,6 +46,12 @@ chmod 600 "$HOME/.config/airflow/jwt_secret"
 export AIRFLOW__API_AUTH__JWT_SECRET="$(cat "$HOME/.config/airflow/jwt_secret")"
 ```
 
+Next, initialise Airflow's own database with
+
+```
+airflow db migrate
+```
+
 Finally, to start the necessary Airflow services, execute them like follows:
 
 ```
