@@ -183,6 +183,7 @@ def pilot_widefield():
                 out = subprocess.check_output(
                     f"wc -l srms_{field['sas_id_target']}_calibrators.txt | cut -f 1 -d ' '",
                     text=True,
+                    shell=True,
                 )
                 num_staged_calib = int(out.strip())
 
@@ -191,6 +192,7 @@ def pilot_widefield():
                 out = subprocess.check_output(
                     f"wc -l srms_{field['sas_id_target']}.txt | cut -f 1 -d ' '",
                     text=True,
+                    shell=True,
                 )
                 num_staged_targ = int(out.strip())
 
