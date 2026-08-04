@@ -483,7 +483,6 @@ def pilot_widefield():
     def run_vlbi_delay(field):
         if (
             (field["status_vlbi_delay"] == PIPELINE_STATUS.finished)
-            or (field["status_vlbi_delay"] == PIPELINE_STATUS.processing)
             or (field["status_vlbi_delay"] == PIPELINE_STATUS.await_approval)
         ):
             return field
