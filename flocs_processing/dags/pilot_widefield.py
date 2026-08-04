@@ -262,7 +262,7 @@ def pilot_widefield():
                 if len(get_surls_online(stage_id_target)) == len(
                     get_surls_requested(stage_id_target)
                 ):
-                    calibrator_staged = True
+                    target_staged = True
                 if target_staged and not target_downloaded:
                     dl_path = os.path.join(DATA_DIR, field["target_name"], "target")
                     cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
