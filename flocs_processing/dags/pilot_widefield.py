@@ -19,11 +19,17 @@ from losoto.h5parm import h5parm
 from stager_access import get_surls_requested, get_surls_online
 
 CONFIG_FILE = os.getenv("FLOCS_AIRFLOW_CONFIG")
+if not os.path.isfile(CONFIG_FILE):
+    raise RuntimeError(f"{CONFIG_FILE} is not a valid file")
 
 parser = configparser.ConfigParser()
 parser.optionxform = str
 with open(CONFIG_FILE, "r") as config:
     parser.read_string("[DEFAULT]\n" + config.read())
+
+print("Config summary:")
+for k, v in parser["DEFAULT"].items():
+    print(f"{k}: {v}")
 
 TABLE_NAME = parser["DEFAULT"]["TABLE_NAME"]
 DATABASE = parser["DEFAULT"]["DATABASE"]
