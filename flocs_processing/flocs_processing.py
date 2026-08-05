@@ -109,7 +109,7 @@ def create_database(
     dbstr = f"create table {table_name}(target_name text default NULL, pipelines text default '{pipeline_str}', priority int default 0, finished bit default 0, downloaded bit default 0"
 
     if "linc" in pipelines:
-        dbstr += ", sas_id_calibrator1 text default NULL, sas_id_calibrator2 text default NULL, sas_id_calibrator_final text default NULL, sas_id_target text primary key default NULL, status_calibrator1 smallint default 0, status_calibrator2 smallint default 0, status_target smallint default 0"
+        dbstr += f", sas_id_calibrator1 text default NULL, sas_id_calibrator2 text default NULL, sas_id_calibrator_final text default NULL, sas_id_target text primary key default NULL, status_calibrator1 smallint default {PIPELINE_STATUS.nothing.value}, status_calibrator2 smallint default {PIPELINE_STATUS.nothing.value}, status_target smallint default {PIPELINE_STATUS.nothing.value}"
     if "ddf-pipeline" in pipelines:
         dbstr += f", status_ddf smallint default {PIPELINE_STATUS.nothing.value}"
     if "vlbi-delay-widefield" in pipelines:
