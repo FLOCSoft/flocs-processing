@@ -11,6 +11,7 @@ import time
 from airflow.exceptions import AirflowFailException
 from airflow.sdk import dag, get_current_context, task
 from airflow.providers.standard.sensors.python import PythonSensor
+from airflow.sdk.exceptions import AirflowSkipException
 from airflow.task.trigger_rule import TriggerRule
 from flocs_lta.lta_search import ObservationStager
 from losoto.h5parm import h5parm
@@ -349,6 +350,9 @@ def pilot_widefield():
 
     @task
     def run_linc_calibrator1(field):
+        field = dict(get_db_columns(field["sas_id_target"])[0])
+        if not field["sas_id_calibrator1"]:
+            raise AirflowSkipException("Calibrator 1 does not exist, skipping.")
         if field["status_calibrator1"] == PIPELINE_STATUS.finished:
             print(
                 f"Flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']} already processed."
@@ -396,6 +400,9 @@ def pilot_widefield():
 
     @task
     def run_linc_calibrator2(field):
+        field = dict(get_db_columns(field["sas_id_target"])[0])
+        if not field["sas_id_calibrator2"]:
+            raise AirflowSkipException("Calibrator 2 does not exist, skipping.")
         if field["status_calibrator2"] == PIPELINE_STATUS.finished:
             print(
                 f"Flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']} already processed."
