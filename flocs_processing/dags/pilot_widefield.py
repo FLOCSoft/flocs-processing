@@ -1,4 +1,5 @@
 from enum import Enum
+import configparser
 import datetime
 import functools
 import os
@@ -17,18 +18,23 @@ from flocs_lta.lta_search import ObservationStager
 from losoto.h5parm import h5parm
 from stager_access import get_surls_requested, get_surls_online
 
-# Need to replace this with a config file
-TABLE_NAME = ""
-DATABASE = ""
-SLURM_ACCOUNT = ""
-SLURM_QUEUE = ""
-DATA_DIR = ""
-OUTPUT_DIR = ""
-PROCESSING_DIR = ""
-NN_MODEL_CACHE = ""
-DDF_CONFIG = ""
+CONFIG_FILE = os.getenv("FLOCS_AIRFLOW_CONFIG")
 
-NEEDS_MANUAL_APPROVAL_DELAY = True
+parser = configparser.ConfigParser()
+parser.optionxform = str
+with open(CONFIG_FILE, "r") as config:
+    parser.read_string("[DEFAULT]\n" + config.read())
+
+TABLE_NAME = parser["DEFAULT"]["TABLE_NAME"]
+DATABASE = parser["DEFAULT"]["DATABASE"]
+SLURM_ACCOUNT = parser["DEFAULT"]["SLURM_ACCOUNT"]
+SLURM_QUEUE = parser["DEFAULT"]["SLURM_QUEUE"]
+DATA_DIR = parser["DEFAULT"]["DATA_DIR"]
+OUTPUT_DIR = parser["DEFAULT"]["OUTPUT_DIR"]
+PROCESSING_DIR = parser["DEFAULT"]["PROCESSING_DIR"]
+NN_MODEL_CACHE = parser["DEFAULT"]["NN_MODEL_CACHE"]
+DDF_CONFIG = parser["DEFAULT"]["DDF_CONFIG"]
+NEEDS_MANUAL_APPROVAL_DELAY = parser["DEFAULT"]["NEEDS_MANUAL_APPROVAL_DELAY"]
 
 
 def get_approval(field, identifier, needs_approval):
