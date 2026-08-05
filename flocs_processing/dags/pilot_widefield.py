@@ -174,11 +174,14 @@ def pilot_widefield():
     def get_unprocessed_target():
         field = None
         for dbrow in get_db_columns():
+            is_processing = False
             row = dict(dbrow)
             status_keys = filter(lambda x: x.startswith("status_"), row.keys())
             for key in status_keys:
                 if row[key] == PIPELINE_STATUS.processing.value:
-                    continue
+                    is_processing = True
+                    break
+            if not is_processing:
                 # Only select a field if nothing is processing it.
                 field = dict(row)
         if not field:
