@@ -135,7 +135,7 @@ class FlocsAirflowProcessor:
                         session_name=f"airflow-{service}",
                         attach=False,
                         window_command=(
-                            f"bash -c 'source {source_file} && airflow api-server'; bash -i"
+                            f"bash -c 'source {source_file} && airflow {service}'; bash -i"
                         ),
                     )
 
