@@ -445,7 +445,7 @@ def pilot_widefield():
                     raise RuntimeError
         return field
 
-    @task(trigger_rule=TriggerRule.ONE_DONE)
+    @task(trigger_rule=TriggerRule.ALL_DONE)
     def select_best_calibrator(result1, result2):
         if result1["sas_id_calibrator_final"]:
             return result1
