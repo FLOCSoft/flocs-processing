@@ -789,7 +789,11 @@ def pilot_widefield():
             print(f"Using DDF run at: {ddf_path}")
 
             context = get_current_context()
-            if context["ti"].try_number == 1:
+            if context["ti"].try_number == 1 or (
+                not os.path.isfile(
+                    f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt"
+                )
+            ):
                 set_status_processing(
                     field["target_name"], "ddf_subtract", field["sas_id_target"]
                 )
@@ -902,7 +906,11 @@ def pilot_widefield():
                 )
 
                 context = get_current_context()
-                if context["ti"].try_number == 1:
+                if context["ti"].try_number == 1 or (
+                    not os.path.isfile(
+                        f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
+                    )
+                ):
                     cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --runner toil --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
                 else:
                     if field["status_vlbi_dd"] == PIPELINE_STATUS.downloaded:
@@ -1199,7 +1207,11 @@ def pilot_widefield():
             )
 
             context = get_current_context()
-            if context["ti"].try_number == 1:
+            if context["ti"].try_number == 1 or (
+                not os.path.isfile(
+                    f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt"
+                )
+            ):
                 cmd = f"flocs-run vlbi image-intermediate-resolution --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --dd-solutions {dd_sols} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
             else:
                 if field["status_vlbi_intermediate_img"] == PIPELINE_STATUS.downloaded:
@@ -1311,7 +1323,11 @@ def pilot_widefield():
             )
 
             context = get_current_context()
-            if context["ti"].try_number == 1:
+            if context["ti"].try_number == 1 or (
+                not os.path.isfile(
+                    f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt"
+                )
+            ):
                 cmd = f"flocs-run vlbi facet-subtract --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --dd-solutions {dd_sols} --model-image-directory {model_images_path} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
             else:
                 if field["status_vlbi_facet_subtract"] == PIPELINE_STATUS.downloaded:
@@ -1321,10 +1337,10 @@ def pilot_widefield():
                     # Extract the previous working directory
                     flocs_workdir = ""
                     print(
-                        f"Scanning log_VLBI_facet_subtract_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
+                        f"Scanning log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
                     )
                     with open(
-                        f"log_VLBI_facet_subtract_{field['target_name']}_{field['sas_id_target']}.txt"
+                        f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt"
                     ) as f_out:
                         for line in f_out.readlines():
                             print(line)
@@ -1342,11 +1358,11 @@ def pilot_widefield():
             print(cmd)
             with (
                 open(
-                    f"log_VLBI_facet_subtract_{field['target_name']}_{field['sas_id_target']}.txt",
+                    f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt",
                     "w+",
                 ) as f_out,
                 open(
-                    f"log_VLBI_facet_subtract_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                    f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}_err.txt",
                     "w+",
                 ) as f_err,
             ):
@@ -1405,7 +1421,11 @@ def pilot_widefield():
             )
 
             context = get_current_context()
-            if context["ti"].try_number == 1:
+            if context["ti"].try_number == 1 or (
+                not os.path.isfile(
+                    f"log_VLBI_facet-imaging_{field['target_name']}_{field['sas_id_target']}.txt"
+                )
+            ):
                 cmd = f"flocs-run vlbi facet-imaging --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --resolution 0.3asec --pixel-scale 0.1 --ms-suffix .ms {target_ms_path}"
             else:
                 if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.downloaded:
