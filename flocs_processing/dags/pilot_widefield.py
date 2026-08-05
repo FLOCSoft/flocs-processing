@@ -160,6 +160,7 @@ def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.
 def pilot_widefield():
     @task
     def get_unprocessed_target():
+        field = None
         for row in get_db_columns():
             status_keys = filter(lambda x: x.startswith("status_"), row.keys())
             for key in status_keys:
@@ -167,6 +168,8 @@ def pilot_widefield():
                     continue
                 # Only select a field if nothing is processing it.
                 field = dict(row)
+        if not field:
+            raise AirflowSkipException("No unprocessed fields found.")
         print(field["target_name"])
         return field
 
