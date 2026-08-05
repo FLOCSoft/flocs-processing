@@ -593,7 +593,11 @@ def pilot_widefield():
                 os.environ["TOIL_SLURM_ARGS"] = f"--exclude={bad_nodes}"
 
             context = get_current_context()
-            if context["ti"].try_number == 1:
+            if context["ti"].try_number == 1 or (
+                not os.path.isfile(
+                    f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
+                )
+            ):
                 cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} --apply-delay-solutions {target_ms_path}"
             else:
                 # Extract the previous working directory
