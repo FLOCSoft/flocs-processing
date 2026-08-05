@@ -18,6 +18,11 @@ from flocs_lta.lta_search import ObservationStager
 from losoto.h5parm import h5parm
 from stager_access import get_surls_requested, get_surls_online
 
+if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
+    raise RuntimeError(
+        "FLOCS_AIRFLOW_CONFIG environment variable not set. Please point this to a valid configuration file."
+    )
+
 CONFIG_FILE = os.getenv("FLOCS_AIRFLOW_CONFIG")
 if not os.path.isfile(CONFIG_FILE):
     raise RuntimeError(f"{CONFIG_FILE} is not a valid file")
