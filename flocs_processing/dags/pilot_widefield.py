@@ -349,9 +349,7 @@ def pilot_widefield():
 
     @task
     def run_linc_calibrator1(field):
-        if (field["status_calibrator1"] == PIPELINE_STATUS.finished) or (
-            field["status_calibrator1"] == PIPELINE_STATUS.processing
-        ):
+        if (field["status_calibrator1"] == PIPELINE_STATUS.finished):
             print(
                 f"Flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']} already processed."
             )
@@ -398,9 +396,7 @@ def pilot_widefield():
 
     @task
     def run_linc_calibrator2(field):
-        if (field["status_calibrator2"] == PIPELINE_STATUS.finished) or (
-            field["status_calibrator2"] == PIPELINE_STATUS.processing
-        ):
+        if field["status_calibrator2"] == PIPELINE_STATUS.finished:
             print(
                 f"Flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']} already processed."
             )
