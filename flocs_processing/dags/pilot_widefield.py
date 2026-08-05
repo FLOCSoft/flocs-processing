@@ -555,7 +555,7 @@ def pilot_widefield():
 
             if not os.path.isfile(delay_cat):
                 ms = list(target_ms_path.glob("*.dp3concat"))[0]
-                cmd = f"lofar-vlbi-plot --MS {ms}"
+                cmd = f"lofar-vlbi-plot --output_dir {outdir} --MS {ms}"
                 with (
                     open(
                         f"log_plot_field_{field['target_name']}_{field['sas_id_target']}.txt",
