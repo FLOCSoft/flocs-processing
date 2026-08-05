@@ -167,7 +167,8 @@ def pilot_widefield():
     @task
     def get_unprocessed_target():
         field = None
-        for row in get_db_columns():
+        for dbrow in get_db_columns():
+            row = dict(dbrow)
             status_keys = filter(lambda x: x.startswith("status_"), row.keys())
             for key in status_keys:
                 if row[key] == PIPELINE_STATUS.processing.value:
