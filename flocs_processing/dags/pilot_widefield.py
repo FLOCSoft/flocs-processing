@@ -4,6 +4,7 @@ import datetime
 import functools
 import os
 import pathlib
+import random
 import re
 import sqlite3
 import subprocess
@@ -15,6 +16,7 @@ from airflow.providers.standard.sensors.python import PythonSensor
 from airflow.sdk.exceptions import AirflowSkipException
 from airflow.task.trigger_rule import TriggerRule
 from flocs_lta.lta_search import ObservationStager
+from ilotss.assess_calibrators import assess_and_compare
 from losoto.h5parm import h5parm
 from stager_access import get_surls_requested, get_surls_online
 
@@ -45,6 +47,7 @@ OUTPUT_DIR = parser["DEFAULT"]["OUTPUT_DIR"]
 PROCESSING_DIR = parser["DEFAULT"]["PROCESSING_DIR"]
 NN_MODEL_CACHE = parser["DEFAULT"]["NN_MODEL_CACHE"]
 DDF_CONFIG = parser["DEFAULT"]["DDF_CONFIG"]
+FLUX_CALIBRATOR_TEMPLATE = parser["DEFAULT"]["FLUX_CALIBRATOR_TEMPLATE"]
 NEEDS_MANUAL_APPROVAL_DELAY = bool(parser["DEFAULT"]["NEEDS_MANUAL_APPROVAL_DELAY"])
 
 
@@ -480,14 +483,70 @@ def pilot_widefield():
         elif result2["sas_id_calibrator_final"]:
             return result2
         elif result1 and result2:
-            print("Selecting between cal1 and cal2")
-            # Need actual selection logic here
-            set_final_calibrator(
-                result1["target_name"],
-                result1["sas_id_target"],
-                result1["sas_id_calibrator1"],
-            )
-            return result1
+            cal_template = pathlib.Path(FLUX_CALIBRATOR_TEMPLATE)
+            if not cal_template.is_file():
+                cal = random.randint(1, 2)
+                print(
+                    f"No flux density calibrator template found. Randomly selected calibrator{cal}"
+                )
+                if cal == 1:
+                    set_final_calibrator(
+                        result1["target_name"],
+                        result1["sas_id_target"],
+                        result1["sas_id_calibrator1"],
+                    )
+                    return result1
+                elif cal == 2:
+                    set_final_calibrator(
+                        result2["target_name"],
+                        result2["sas_id_target"],
+                        result2["sas_id_calibrator2"],
+                    )
+                    return result2
+            else:
+                outdir = os.path.join(OUTPUT_DIR, result1["target_name"])
+                calibrator1_path = get_most_recent_run(
+                    outdir, result1["sas_id_calibrator1"], "LINC_calibrator"
+                )
+                calibrator1_solutions = (
+                    calibrator1_path / "results_LINC_calibrator" / "cal_solutions.h5"
+                )
+
+                calibrator2_path = get_most_recent_run(
+                    outdir, result2["sas_id_calibrator2"], "LINC_calibrator"
+                )
+                calibrator2_solutions = (
+                    calibrator2_path / "results_LINC_calibrator" / "cal_solutions.h5"
+                )
+                assess_cal1 = assess_and_compare(
+                    FLUX_CALIBRATOR_TEMPLATE,
+                    [calibrator1_solutions],
+                )
+                assess_cal2 = assess_and_compare(
+                    FLUX_CALIBRATOR_TEMPLATE,
+                    [calibrator2_solutions],
+                )
+                score1 = assess_cal1[0]["score"]
+                score2 = assess_cal2[0]["score"]
+                print(f"Calibrator 1 score: {score1}")
+                print(f"Calibrator 2 score: {score2}")
+                match score1 < score2:
+                    case True:
+                        print("Best score for calibrator1")
+                        set_final_calibrator(
+                            result1["target_name"],
+                            result1["sas_id_target"],
+                            result1["sas_id_calibrator1"],
+                        )
+                        return result1
+                    case False:
+                        print("Best score for calibrator2")
+                        set_final_calibrator(
+                            result2["target_name"],
+                            result2["sas_id_target"],
+                            result2["sas_id_calibrator2"],
+                        )
+                        return result2
         elif result1 and (not result2):
             print("Only cal 1 succeeded, continuing with that")
             set_final_calibrator(

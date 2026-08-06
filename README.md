@@ -2,6 +2,8 @@
 
 This package aims to provide relatively simple end-to-end automatic processing of ILT HBA data. Where `flocs-runners` provides the interface to running pipelines, `flocs-processing` is the scaffolding to tie it together. Data reduction is coordinated via a dedicated SQLite database that holds information on which observations to process, which pipelines to run for them and all of the related statuses. Orchestration of all the pipelines is handled via Airflow through a DAG.
 
+The autoPILOT package (https://github.com/LOFAR-VLBI/autoPILOT) needs to be on PYTHONPATH to enable the automatic calibrator assessment.
+
 ## Folder setup
 Flocs-processing requires three folders to be setup:
 
