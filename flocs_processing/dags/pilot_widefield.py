@@ -507,9 +507,9 @@ def pilot_widefield():
             return field
         else:
             if CWL_RUNNER_LINC == "cwltool":
-                run_linc_calibrator_cwltool(field, calibrator_field=1)
+                run_linc_calibrator_cwltool(field, calibrator_field=2)
             elif CWL_RUNNER_LINC == "toil":
-                run_linc_calibrator_toil(field, calibrator_field=1)
+                run_linc_calibrator_toil(field, calibrator_field=2)
             else:
                 raise RuntimeError("Invalid CWL runner specified.")
         return field
