@@ -1,7 +1,7 @@
-from enum import Enum
+from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
+
 import configparser
 import datetime
-import functools
 import os
 import pathlib
 import random
@@ -52,13 +52,15 @@ NEEDS_MANUAL_APPROVAL_DELAY = bool(parser["DEFAULT"]["NEEDS_MANUAL_APPROVAL_DELA
 
 CWL_RUNNER_LINC = "cwltool"
 
+CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
+
 
 def run_linc_calibrator_cwltool(field, calibrator_field: int):
     print(
         f"Processing flux density calibrator {field[f'sas_id_calibrator{calibrator_field}']} for observation {field['target_name']} {field['sas_id_target']}"
     )
     ms_folder = f"L{field[f'sas_id_calibrator{calibrator_field}']}"
-    set_status_processing(
+    CURRENT_DB.set_status_processing(
         field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"]
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
@@ -95,7 +97,7 @@ def run_linc_calibrator_cwltool(field, calibrator_field: int):
                 if (status == "RUNNING") or (status == "PENDING"):
                     time.sleep(60)
                 elif status == "COMPLETED":
-                    set_status_finished(
+                    CURRENT_DB.set_status_finished(
                         field["target_name"],
                         f"calibrator{calibrator_field}",
                         field["sas_id_target"],
@@ -116,7 +118,7 @@ def run_linc_calibrator_toil(field, calibrator_field: int):
         f"Processing flux density calibrator {field[f'sas_id_calibrator{calibrator_field}']} for observation {field['target_name']} {field['sas_id_target']}"
     )
     ms_folder = f"L{field[f'sas_id_calibrator{calibrator_field}']}"
-    set_status_processing(
+    CURRENT_DB.set_status_processing(
         field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"]
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
@@ -142,7 +144,7 @@ def run_linc_calibrator_toil(field, calibrator_field: int):
             if pattern.search(f_err.read()):
                 success = True
         if success:
-            set_status_finished(
+            CURRENT_DB.set_status_finished(
                 field["target_name"],
                 f"calibrator{calibrator_field}",
                 field["sas_id_target"],
@@ -166,101 +168,6 @@ def get_approval(field, identifier, needs_approval):
         return field
 
 
-@functools.total_ordering
-class PIPELINE_STATUS(Enum):
-    nothing = 0
-    downloaded = 1
-    finished = 2
-    await_approval = 3
-    processing = 98
-    error = 99
-
-    def __eq__(self, other):
-        if other.__class__ is int:
-            return self.value == other
-        elif other.__class__ is self.__class__:
-            return self.value == other.value
-        else:
-            raise NotImplementedError
-
-    def __lt__(self, other):
-        if self.__class__ is not other.__class__:
-            raise NotImplementedError
-        return self.value < other.value
-
-
-def get_db_columns(obsid: str = None):
-    with sqlite3.connect(DATABASE) as db:
-        db.row_factory = sqlite3.Row
-        cursor = db.cursor()
-        columns = "target_name,priority,finished,downloaded,sas_id_calibrator1,sas_id_calibrator2,sas_id_calibrator_final,sas_id_target,status_calibrator1,status_calibrator2,status_target,status_vlbi_delay,status_vlbi_dd,status_ddf,status_vlbi_ddf_subtract"
-        if obsid:
-            field = cursor.execute(
-                f"select {columns} from {TABLE_NAME} where sas_id_target=='{obsid}' and finished==0 order by priority desc"
-            ).fetchall()
-        else:
-            field = cursor.execute(
-                f"select {columns} from {TABLE_NAME} where finished==0 order by priority desc"
-            ).fetchall()
-        print(field)
-    return field
-
-
-def set_status_failed(name, identifier, target):
-    with sqlite3.connect(DATABASE) as db:
-        cursor = db.cursor()
-        cursor.execute(
-            f"update {TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.error.value} where target_name=='{name}' and sas_id_target=='{target}'"
-        )
-
-
-def set_status_processing(name, identifier, target):
-    with sqlite3.connect(DATABASE) as db:
-        cursor = db.cursor()
-        cursor.execute(
-            f"update {TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.processing.value} where target_name=='{name}' and sas_id_target=='{target}'"
-        )
-
-
-def set_status_await_approval(name, identifier, target):
-    with sqlite3.connect(DATABASE) as db:
-        cursor = db.cursor()
-        cursor.execute(
-            f"update {TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.await_approval.value} where target_name=='{name}' and sas_id_target=='{target}'"
-        )
-
-
-def set_status_finished(name, identifier, target):
-    with sqlite3.connect(DATABASE) as db:
-        cursor = db.cursor()
-        cursor.execute(
-            f"update {TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.finished.value} where target_name=='{name}' and sas_id_target=='{target}'"
-        )
-
-
-def set_status_downloaded(name, target):
-    with sqlite3.connect(DATABASE) as db:
-        cursor = db.cursor()
-        cursor.execute(
-            f"update {TABLE_NAME} set downloaded=1 where target_name=='{name}' and sas_id_target=='{target}'"
-        )
-
-
-def set_field_finished(name, target):
-    query = f"update {TABLE_NAME} set finished=1 where target_name=='{name}' and sas_id_target=='{target}'"
-    with sqlite3.connect(DATABASE) as db:
-        cursor = db.cursor()
-        cursor.execute(query)
-
-
-def set_final_calibrator(name, target, final_cal):
-    with sqlite3.connect(DATABASE) as db:
-        cursor = db.cursor()
-        cursor.execute(
-            f"update {TABLE_NAME} set sas_id_calibrator_final={final_cal} where target_name=='{name}' and sas_id_target=='{target}'"
-        )
-
-
 def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.Path:
     rundirs = pathlib.Path(searchpath)
     rundirs_sorted = sorted(rundirs.iterdir())
@@ -281,7 +188,7 @@ def pilot_widefield():
     @task
     def get_unprocessed_target():
         field = None
-        for dbrow in get_db_columns():
+        for dbrow in CURRENT_DB.get_db_columns():
             is_processing = False
             row = dict(dbrow)
             status_keys = filter(lambda x: x.startswith("status_"), row.keys())
@@ -300,7 +207,7 @@ def pilot_widefield():
 
     @task.short_circuit
     def check_fields():
-        fields = get_db_columns()
+        fields = CURRENT_DB.get_db_columns()
         return bool(fields)
 
     @task
@@ -465,7 +372,7 @@ def pilot_widefield():
                                 cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                             )
                             if not proc.returncode:
-                                set_status_downloaded(
+                                CURRENT_DB.set_status_downloaded(
                                     field["target_name"],
                                     field["sas_id_target"],
                                 )
@@ -478,7 +385,7 @@ def pilot_widefield():
 
     @task
     def run_linc_calibrator1(field):
-        field = dict(get_db_columns(field["sas_id_target"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if not field["sas_id_calibrator1"]:
             raise AirflowSkipException("Calibrator 1 does not exist, skipping.")
         if field["status_calibrator1"] == PIPELINE_STATUS.finished:
@@ -497,7 +404,7 @@ def pilot_widefield():
 
     @task
     def run_linc_calibrator2(field):
-        field = dict(get_db_columns(field["sas_id_target"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if not field["sas_id_calibrator2"]:
             raise AirflowSkipException("Calibrator 2 does not exist, skipping.")
         if field["status_calibrator2"] == PIPELINE_STATUS.finished:
@@ -528,14 +435,14 @@ def pilot_widefield():
                     f"No flux density calibrator template found. Randomly selected calibrator{cal}"
                 )
                 if cal == 1:
-                    set_final_calibrator(
+                    CURRENT_DB.set_final_calibrator(
                         result1["target_name"],
                         result1["sas_id_target"],
                         result1["sas_id_calibrator1"],
                     )
                     return result1
                 elif cal == 2:
-                    set_final_calibrator(
+                    CURRENT_DB.set_final_calibrator(
                         result2["target_name"],
                         result2["sas_id_target"],
                         result2["sas_id_calibrator2"],
@@ -571,7 +478,7 @@ def pilot_widefield():
                 match score1 < score2:
                     case True:
                         print("Best score for calibrator1")
-                        set_final_calibrator(
+                        CURRENT_DB.set_final_calibrator(
                             result1["target_name"],
                             result1["sas_id_target"],
                             result1["sas_id_calibrator1"],
@@ -579,7 +486,7 @@ def pilot_widefield():
                         return result1
                     case False:
                         print("Best score for calibrator2")
-                        set_final_calibrator(
+                        CURRENT_DB.set_final_calibrator(
                             result2["target_name"],
                             result2["sas_id_target"],
                             result2["sas_id_calibrator2"],
@@ -587,7 +494,7 @@ def pilot_widefield():
                         return result2
         elif result1 and (not result2):
             print("Only cal 1 succeeded, continuing with that")
-            set_final_calibrator(
+            CURRENT_DB.set_final_calibrator(
                 result1["target_name"],
                 result1["sas_id_target"],
                 result1["sas_id_calibrator1"],
@@ -595,7 +502,7 @@ def pilot_widefield():
             return result1
         elif (not result1) and result2:
             print("Only cal 2 succeeded, continuing with that")
-            set_final_calibrator(
+            CURRENT_DB.set_final_calibrator(
                 result2["target_name"],
                 result2["sas_id_target"],
                 result2["sas_id_calibrator2"],
@@ -622,7 +529,7 @@ def pilot_widefield():
             calibrator_solutions = (
                 calibrator_path / "results_LINC_calibrator" / "cal_solutions.h5"
             )
-            set_status_processing(
+            CURRENT_DB.set_status_processing(
                 field["target_name"], "target", field["sas_id_target"]
             )
             cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
@@ -649,7 +556,7 @@ def pilot_widefield():
                     if pattern.search(f_err.read()):
                         success = True
                 if success:
-                    set_status_finished(
+                    CURRENT_DB.set_status_finished(
                         field["target_name"], "target", field["sas_id_target"]
                     )
                 else:
@@ -675,7 +582,7 @@ def pilot_widefield():
                 outdir, field["sas_id_target"], "LINC_target"
             )
             target_ms_path = target_path / "results_LINC_target" / "results"
-            set_status_processing(
+            CURRENT_DB.set_status_processing(
                 field["target_name"], "vlbi_delay", field["sas_id_target"]
             )
 
@@ -773,11 +680,11 @@ def pilot_widefield():
 
                 if success:
                     if NEEDS_MANUAL_APPROVAL_DELAY:
-                        set_status_await_approval(
+                        CURRENT_DB.set_status_await_approval(
                             field["target_name"], "vlbi_delay", field["sas_id_target"]
                         )
                     else:
-                        set_status_finished(
+                        CURRENT_DB.set_status_finished(
                             field["target_name"], "vlbi_delay", field["sas_id_target"]
                         )
                 else:
@@ -786,7 +693,7 @@ def pilot_widefield():
 
     @task
     def run_ddf_pipeline(field):
-        field = dict(get_db_columns(field["sas_id_target"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if field["status_ddf"] == PIPELINE_STATUS.processing:
             print(
                 f"ddf-pipeline for {field['target_name']} {field['sas_id_target']} should be running, attempting to resume polling..."
@@ -817,7 +724,7 @@ def pilot_widefield():
                     if (status == "RUNNING") or (status == "PENDING"):
                         time.sleep(60)
                     elif status == "COMPLETED":
-                        set_status_finished(
+                        CURRENT_DB.set_status_finished(
                             field["target_name"], "ddf_subtract", field["sas_id_target"]
                         )
                         return field
@@ -844,7 +751,9 @@ def pilot_widefield():
 
             cmd = f"flocs-run ddf-pipeline --scheduler slurm --slurm-time 72:00:00 --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --config-file {DDF_CONFIG} {target_ms_path}"
             print(cmd)
-            set_status_processing(field["target_name"], "ddf", field["sas_id_target"])
+            CURRENT_DB.set_status_processing(
+                field["target_name"], "ddf", field["sas_id_target"]
+            )
             with (
                 open(
                     f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}.txt",
@@ -879,7 +788,7 @@ def pilot_widefield():
                         if (status == "RUNNING") or (status == "PENDING"):
                             time.sleep(60)
                         elif status == "COMPLETED":
-                            set_status_finished(
+                            CURRENT_DB.set_status_finished(
                                 field["target_name"],
                                 "ddf_subtract",
                                 field["sas_id_target"],
@@ -897,7 +806,7 @@ def pilot_widefield():
 
     @task
     def run_ddf_subtract(field):
-        field = dict(get_db_columns(field["sas_id_target"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if field["status_vlbi_ddf_subtract"] == PIPELINE_STATUS.finished:
             return field
         else:
@@ -923,7 +832,7 @@ def pilot_widefield():
                     f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt"
                 )
             ):
-                set_status_processing(
+                CURRENT_DB.set_status_processing(
                     field["target_name"], "ddf_subtract", field["sas_id_target"]
                 )
                 cmd = f"flocs-run vlbi process-ddf --runner toil --record-toil-stats --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix .dp3concat --ddf-rundir {ddf_path} --solsdir {ddf_sols_path} --do-subtraction {target_ms_path}"
@@ -970,7 +879,7 @@ def pilot_widefield():
                     if pattern.search(f_err.read()):
                         success = True
                 if success:
-                    set_status_finished(
+                    CURRENT_DB.set_status_finished(
                         field["target_name"], "ddf_subtract", field["sas_id_target"]
                     )
                 else:
@@ -979,7 +888,7 @@ def pilot_widefield():
 
     @task
     def run_vlbi_ddcal(field):
-        field = dict(get_db_columns(field["sas_id_target"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if (field["status_vlbi_dd"] == PIPELINE_STATUS.finished) or (
             field["status_vlbi_dd"] == PIPELINE_STATUS.processing
         ):
@@ -1012,7 +921,7 @@ def pilot_widefield():
                 if not os.path.isfile(source_cat):
                     raise AirflowFailException(f"{source_cat} not found.")
 
-                set_status_processing(
+                CURRENT_DB.set_status_processing(
                     field["target_name"], "vlbi_dd", field["sas_id_target"]
                 )
                 cmd = f"flocs-run vlbi dd-calibration --runner toil --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --phasediff-score 10.0 --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat {target_ms_path}"
@@ -1030,7 +939,7 @@ def pilot_widefield():
                 if not os.path.isfile(source_cat):
                     raise AirflowFailException(f"{source_cat} not found.")
 
-                set_status_processing(
+                CURRENT_DB.set_status_processing(
                     field["target_name"], "vlbi_dd", field["sas_id_target"]
                 )
 
@@ -1088,12 +997,14 @@ def pilot_widefield():
                     if pattern.search(f_err.read()):
                         success = True
                 if success:
-                    set_status_finished(
+                    CURRENT_DB.set_status_finished(
                         field["target_name"], "vlbi_dd", field["sas_id_target"]
                     )
-                    set_field_finished(field["target_name"], field["sas_id_target"])
+                    CURRENT_DB.set_field_finished(
+                        field["target_name"], field["sas_id_target"]
+                    )
                 else:
-                    set_status_failed(
+                    CURRENT_DB.set_status_failed(
                         field["target_name"], "vlbi_dd", field["sas_id_target"]
                     )
                     raise RuntimeError
@@ -1306,7 +1217,7 @@ def pilot_widefield():
 
     @task
     def run_vlbi_image_intermediate(field):
-        field = dict(get_db_columns(field["sas_id_target"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if (field["status_vlbi_intermediate_img"] == PIPELINE_STATUS.finished) or (
             field["status_vlbi_intermediate_img"] == PIPELINE_STATUS.processing
         ):
@@ -1331,7 +1242,7 @@ def pilot_widefield():
             if not os.path.isfile(dd_sols):
                 raise AirflowFailException(f"{dd_sols} not found.")
 
-            set_status_processing(
+            CURRENT_DB.set_status_processing(
                 field["target_name"], "vlbi_intermediate_img", field["sas_id_target"]
             )
 
@@ -1389,14 +1300,16 @@ def pilot_widefield():
                     if pattern.search(f_err.read()):
                         success = True
                 if success:
-                    set_status_finished(
+                    CURRENT_DB.set_status_finished(
                         field["target_name"],
                         "vlbi_intermediate_img",
                         field["sas_id_target"],
                     )
-                    set_field_finished(field["target_name"], field["sas_id_target"])
+                    CURRENT_DB.set_field_finished(
+                        field["target_name"], field["sas_id_target"]
+                    )
                 else:
-                    set_status_failed(
+                    CURRENT_DB.set_status_failed(
                         field["target_name"],
                         "vlbi_intermediate_img",
                         field["sas_id_target"],
@@ -1406,7 +1319,7 @@ def pilot_widefield():
 
     @task
     def run_vlbi_facet_subtract(field):
-        field = dict(get_db_columns(field["sas_id_target"])[0])
+        field = dict(CURRENT_DB.CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if (field["status_vlbi_facet_subtract"] == PIPELINE_STATUS.finished) or (
             field["status_vlbi_facet_subtract"] == PIPELINE_STATUS.processing
         ):
@@ -1447,7 +1360,7 @@ def pilot_widefield():
                     "No suitable intermediate resolution model images found."
                 )
 
-            set_status_processing(
+            CURRENT_DB.set_status_processing(
                 field["target_name"], "vlbi_facet_subtract", field["sas_id_target"]
             )
 
@@ -1505,14 +1418,16 @@ def pilot_widefield():
                     if pattern.search(f_err.read()):
                         success = True
                 if success:
-                    set_status_finished(
+                    CURRENT_DB.set_status_finished(
                         field["target_name"],
                         "vlbi_facet_subtract",
                         field["sas_id_target"],
                     )
-                    set_field_finished(field["target_name"], field["sas_id_target"])
+                    CURRENT_DB.set_field_finished(
+                        field["target_name"], field["sas_id_target"]
+                    )
                 else:
-                    set_status_failed(
+                    CURRENT_DB.set_status_failed(
                         field["target_name"],
                         "vlbi_facet_subtract",
                         field["sas_id_target"],
@@ -1522,7 +1437,7 @@ def pilot_widefield():
 
     @task
     def run_vlbi_facet_imaging(field):
-        field = dict(get_db_columns(field["sas_id_target"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if (field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished) or (
             field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.processing
         ):
@@ -1545,7 +1460,7 @@ def pilot_widefield():
                     "No suitable intermediate resolution model images found."
                 )
 
-            set_status_processing(
+            CURRENT_DB.set_status_processing(
                 field["target_name"], "vlbi_facet_imaging", field["sas_id_target"]
             )
 
@@ -1603,14 +1518,16 @@ def pilot_widefield():
                     if pattern.search(f_err.read()):
                         success = True
                 if success:
-                    set_status_finished(
+                    CURRENT_DB.set_status_finished(
                         field["target_name"],
                         "vlbi_facet_imaging",
                         field["sas_id_target"],
                     )
-                    set_field_finished(field["target_name"], field["sas_id_target"])
+                    CURRENT_DB.set_field_finished(
+                        field["target_name"], field["sas_id_target"]
+                    )
                 else:
-                    set_status_failed(
+                    CURRENT_DB.set_status_failed(
                         field["target_name"],
                         "vlbi_facet_imaging",
                         field["sas_id_target"],
