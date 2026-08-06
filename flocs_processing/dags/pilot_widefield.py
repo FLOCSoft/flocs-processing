@@ -50,6 +50,106 @@ DDF_CONFIG = parser["DEFAULT"]["DDF_CONFIG"]
 FLUX_CALIBRATOR_TEMPLATE = parser["DEFAULT"]["FLUX_CALIBRATOR_TEMPLATE"]
 NEEDS_MANUAL_APPROVAL_DELAY = bool(parser["DEFAULT"]["NEEDS_MANUAL_APPROVAL_DELAY"])
 
+CWL_RUNNER_LINC = "cwltool"
+
+
+def run_linc_calibrator_cwltool(field, calibrator_field: int):
+    print(
+        f"Processing flux density calibrator {field[f'sas_id_calibrator{calibrator_field}']} for observation {field['target_name']} {field['sas_id_target']}"
+    )
+    ms_folder = f"L{field[f'sas_id_calibrator{calibrator_field}']}"
+    set_status_processing(
+        field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"]
+    )
+    outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    cmd = f"flocs-run linc calibrator --runner cwltool --scheduler slurm --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
+    with (
+        open(
+            f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}.txt",
+            "w+",
+        ) as f_out,
+        open(
+            f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}_err.txt",
+            "w+",
+        ) as f_err,
+    ):
+        proc = subprocess.run(cmd, shell=True, text=True, stdout=f_out, stderr=f_err)
+        jobid = None
+        if not proc.returncode:
+            f_out.seek(0)
+            for line in f_out.readlines():
+                if "Submitted batch job" in line:
+                    jobid = line.strip().split()[-1]
+        else:
+            raise RuntimeError("Failed to submit job.")
+
+        if not jobid:
+            raise RuntimeError("Failed to retrieve job id")
+        else:
+            while True:
+                print(f"Polling LINC calibrator job {jobid}")
+                poll_cmd = f"sacct -X -j {jobid} --format=State --noheader"
+                status = subprocess.run(
+                    poll_cmd, shell=True, text=True, capture_output=True
+                ).stdout.strip()
+                if (status == "RUNNING") or (status == "PENDING"):
+                    time.sleep(60)
+                elif status == "COMPLETED":
+                    set_status_finished(
+                        field["target_name"],
+                        f"calibrator{calibrator_field}",
+                        field["sas_id_target"],
+                    )
+                    break
+                elif (
+                    (status == "FAILED")
+                    or ("TIMEOUT" in status)
+                    or ("CANCELLED" in status)
+                ):
+                    raise RuntimeError(
+                        f"LINC calibrator for {field['target_name']} {field['sas_id_target']} failed."
+                    )
+
+
+def run_linc_calibrator_toil(field, calibrator_field: int):
+    print(
+        f"Processing flux density calibrator {field[f'sas_id_calibrator{calibrator_field}']} for observation {field['target_name']} {field['sas_id_target']}"
+    )
+    ms_folder = f"L{field[f'sas_id_calibrator{calibrator_field}']}"
+    set_status_processing(
+        field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"]
+    )
+    outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
+    print(cmd)
+    with (
+        open(
+            f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}.txt",
+            "w+",
+        ) as f_out,
+        open(
+            f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}_err.txt",
+            "w+",
+        ) as f_err,
+    ):
+        proc = subprocess.run(cmd, shell=True, text=True, stdout=f_out, stderr=f_err)
+        success = False
+        pattern = re.compile(r"Workflow.* stopped. Success: True")
+        if not proc.returncode:
+            f_err.seek(0)
+            if pattern.search(f_err.read()):
+                success = True
+        if success:
+            set_status_finished(
+                field["target_name"],
+                f"calibrator{calibrator_field}",
+                field["sas_id_target"],
+            )
+        else:
+            raise RuntimeError
+
 
 def get_approval(field, identifier, needs_approval):
     if not needs_approval:
@@ -387,43 +487,12 @@ def pilot_widefield():
             )
             return field
         else:
-            print(
-                f"Processing flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']}"
-            )
-            ms_folder = f"L{field['sas_id_calibrator1']}"
-            set_status_processing(
-                field["target_name"], "calibrator1", field["sas_id_target"]
-            )
-            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-            cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
-            if not os.path.isdir(outdir):
-                os.mkdir(outdir)
-            print(cmd)
-            with (
-                open(
-                    f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator1']}.txt",
-                    "w+",
-                ) as f_out,
-                open(
-                    f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator1']}_err.txt",
-                    "w+",
-                ) as f_err,
-            ):
-                proc = subprocess.run(
-                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                )
-                success = False
-                pattern = re.compile(r"Workflow.* stopped. Success: True")
-                if not proc.returncode:
-                    f_err.seek(0)
-                    if pattern.search(f_err.read()):
-                        success = True
-                if success:
-                    set_status_finished(
-                        field["target_name"], "calibrator1", field["sas_id_target"]
-                    )
-                else:
-                    raise RuntimeError
+            if CWL_RUNNER_LINC == "cwltool":
+                run_linc_calibrator_cwltool(field, calibrator_field=1)
+            elif CWL_RUNNER_LINC == "toil":
+                run_linc_calibrator_toil(field, calibrator_field=1)
+            else:
+                raise RuntimeError("Invalid CWL runner specified.")
         return field
 
     @task
@@ -437,43 +506,12 @@ def pilot_widefield():
             )
             return field
         else:
-            print(
-                f"Processing flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']}"
-            )
-            ms_folder = f"L{field['sas_id_calibrator2']}"
-            set_status_processing(
-                field["target_name"], "calibrator2", field["sas_id_target"]
-            )
-            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-            cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
-            if not os.path.isdir(outdir):
-                os.mkdir(outdir)
-            print(cmd)
-            with (
-                open(
-                    f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator2']}.txt",
-                    "w+",
-                ) as f_out,
-                open(
-                    f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator2']}_err.txt",
-                    "w+",
-                ) as f_err,
-            ):
-                proc = subprocess.run(
-                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                )
-                success = False
-                pattern = re.compile(r"Workflow.* stopped. Success: True")
-                if not proc.returncode:
-                    f_err.seek(0)
-                    if pattern.search(f_err.read()):
-                        success = True
-                if success:
-                    set_status_finished(
-                        field["target_name"], "calibrator2", field["sas_id_target"]
-                    )
-                else:
-                    raise RuntimeError
+            if CWL_RUNNER_LINC == "cwltool":
+                run_linc_calibrator_cwltool(field, calibrator_field=1)
+            elif CWL_RUNNER_LINC == "toil":
+                run_linc_calibrator_toil(field, calibrator_field=1)
+            else:
+                raise RuntimeError("Invalid CWL runner specified.")
         return field
 
     @task(trigger_rule=TriggerRule.ALL_DONE)
