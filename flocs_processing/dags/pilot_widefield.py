@@ -779,6 +779,9 @@ def pilot_widefield():
                     if (status == "RUNNING") or (status == "PENDING"):
                         time.sleep(60)
                     elif status == "COMPLETED":
+                        set_status_finished(
+                            field["target_name"], "ddf_subtract", field["sas_id_target"]
+                        )
                         return field
                     elif (status == "FAILED") or ("TIMEOUT" in status):
                         raise RuntimeError(
@@ -801,7 +804,7 @@ def pilot_widefield():
                 )
                 target_ms_path = target_path / "results_LINC_target" / "results"
 
-            cmd = f"flocs-run ddf-pipeline --scheduler slurm --slurm-time 72:00:00 --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {OUTPUT_DIR} --config-file {DDF_CONFIG} {target_ms_path}"
+            cmd = f"flocs-run ddf-pipeline --scheduler slurm --slurm-time 72:00:00 --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --config-file {DDF_CONFIG} {target_ms_path}"
             print(cmd)
             set_status_processing(field["target_name"], "ddf", field["sas_id_target"])
             with (
@@ -838,6 +841,11 @@ def pilot_widefield():
                         if (status == "RUNNING") or (status == "PENDING"):
                             time.sleep(60)
                         elif status == "COMPLETED":
+                            set_status_finished(
+                                field["target_name"],
+                                "ddf_subtract",
+                                field["sas_id_target"],
+                            )
                             break
                         elif (
                             (status == "FAILED")
@@ -851,9 +859,8 @@ def pilot_widefield():
 
     @task
     def run_ddf_subtract(field):
-        if (field["status_vlbi_ddf_subtract"] == PIPELINE_STATUS.finished) or (
-            field["status_vlbi_ddf_subtract"] == PIPELINE_STATUS.processing
-        ):
+        field = dict(get_db_columns(field["sas_id_target"])[0])
+        if field["status_vlbi_ddf_subtract"] == PIPELINE_STATUS.finished:
             return field
         else:
             print(
