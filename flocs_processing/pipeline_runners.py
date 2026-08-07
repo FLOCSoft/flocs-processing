@@ -67,14 +67,23 @@ def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
         field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"]
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     cmd = f"flocs-run linc calibrator --runner cwltool --scheduler slurm --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
     with (
         open(
-            f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}.txt",
+            os.path.join(
+                logsdir,
+                f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}.txt",
+            ),
             "w+",
         ) as f_out,
         open(
-            f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}_err.txt",
+            os.path.join(
+                logsdir,
+                f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}_err.txt",
+            ),
             "w+",
         ) as f_err,
     ):
@@ -125,17 +134,26 @@ def run_linc_calibrator_toil(field, calibrator_field: int, db: FlocsDB):
         field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"]
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
     if not os.path.isdir(outdir):
         os.mkdir(outdir)
     print(cmd)
     with (
         open(
-            f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}.txt",
+            os.path.join(
+                logsdir,
+                f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}.txt",
+            ),
             "w+",
         ) as f_out,
         open(
-            f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}_err.txt",
+            os.path.join(
+                logsdir,
+                f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}_err.txt",
+            ),
             "w+",
         ) as f_err,
     ):
@@ -162,6 +180,9 @@ def run_linc_target_cwltool(field, db: FlocsDB):
     )
     ms_folder = f"L{field['sas_id_target']}"
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     calibrator_path = get_most_recent_run(
         outdir, field["sas_id_calibrator_final"], "LINC_calibrator"
     )
@@ -175,11 +196,17 @@ def run_linc_target_cwltool(field, db: FlocsDB):
     print(cmd)
     with (
         open(
-            f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
+            os.path.join(
+                logsdir,
+                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
+            ),
             "w+",
         ) as f_out,
         open(
-            f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            os.path.join(
+                logsdir,
+                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            ),
             "w+",
         ) as f_err,
     ):
@@ -227,6 +254,9 @@ def run_linc_target_toil(field, db: FlocsDB):
     )
     ms_folder = f"L{field['sas_id_target']}"
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     calibrator_path = get_most_recent_run(
         outdir, field["sas_id_calibrator_final"], "LINC_calibrator"
     )
@@ -240,11 +270,17 @@ def run_linc_target_toil(field, db: FlocsDB):
     print(cmd)
     with (
         open(
-            f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
+            os.path.join(
+                logsdir,
+                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
+            ),
             "w+",
         ) as f_out,
         open(
-            f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            os.path.join(
+                logsdir,
+                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            ),
             "w+",
         ) as f_err,
     ):
@@ -268,6 +304,9 @@ def run_pilot_delay_cwltool(field, db: FlocsDB):
         f"Processing delay calibration for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
     target_ms_path = target_path / "results_LINC_target" / "results"
     db.set_status_processing(field["target_name"], "vlbi_delay", field["sas_id_target"])
@@ -280,11 +319,17 @@ def run_pilot_delay_cwltool(field, db: FlocsDB):
         cmd = f"lofar-vlbi-plot --force --output_dir {outdir} --MS {ms}"
         with (
             open(
-                f"log_plot_field_{field['target_name']}_{field['sas_id_target']}.txt",
+                os.path.join(
+                    logsdir,
+                    f"log_plot_field_{field['target_name']}_{field['sas_id_target']}.txt",
+                ),
                 "w+",
             ) as f_out,
             open(
-                f"log_plot_field_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                os.path.join(
+                    logsdir,
+                    f"log_plot_field_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                ),
                 "w+",
             ) as f_err,
         ):
@@ -370,6 +415,9 @@ def run_pilot_delay_toil(field, db: FlocsDB):
         f"Processing delay calibration for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
     target_ms_path = target_path / "results_LINC_target" / "results"
     db.set_status_processing(field["target_name"], "vlbi_delay", field["sas_id_target"])
@@ -382,11 +430,17 @@ def run_pilot_delay_toil(field, db: FlocsDB):
         cmd = f"lofar-vlbi-plot --force --output_dir {outdir} --MS {ms}"
         with (
             open(
-                f"log_plot_field_{field['target_name']}_{field['sas_id_target']}.txt",
+                os.path.join(
+                    logsdir,
+                    f"log_plot_field_{field['target_name']}_{field['sas_id_target']}.txt",
+                ),
                 "w+",
             ) as f_out,
             open(
-                f"log_plot_field_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                os.path.join(
+                    logsdir,
+                    f"log_plot_field_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                ),
                 "w+",
             ) as f_err,
         ):
@@ -478,6 +532,9 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB):
         f"Processing ILT dd calibration for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     if "status_ddf" not in field:
         print("Not a widefield imaging run, checking LINC + delay calibration.")
         target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
@@ -519,11 +576,17 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB):
     print(cmd)
     with (
         open(
-            f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+            ),
             "w+",
         ) as f_out,
         open(
-            f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            ),
             "w+",
         ) as f_err,
     ):
@@ -568,6 +631,9 @@ def run_pilot_ddcal_toil(field, db: FlocsDB):
         f"Processing ILT dd calibration for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     if "status_ddf" not in field:
         print("Not a widefield imaging run, checking LINC + delay calibration.")
         target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
@@ -621,7 +687,10 @@ def run_pilot_ddcal_toil(field, db: FlocsDB):
                     f"Scanning log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
                 )
                 with open(
-                    f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
+                    os.path.join(
+                        logsdir,
+                        f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+                    )
                 ) as f_out:
                     for line in f_out.readlines():
                         print(line)
@@ -671,6 +740,9 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
         f"Processing ILT intermediate resolution imaging for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     target_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_process-ddf"
     )
@@ -708,7 +780,10 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
                 f"Scanning log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
             )
             with open(
-                f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt"
+                os.path.join(
+                    logsdir,
+                    f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt",
+                )
             ) as f_out:
                 for line in f_out.readlines():
                     print(line)
@@ -762,6 +837,9 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
         f"Processing ILT facet subtraction for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     target_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_process-ddf"
     )
@@ -815,7 +893,10 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
                 f"Scanning log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
             )
             with open(
-                f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt"
+                os.path.join(
+                    logsdir,
+                    f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt",
+                )
             ) as f_out:
                 for line in f_out.readlines():
                     print(line)
@@ -869,6 +950,9 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB):
         f"Processing ILT facet imaging for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     target_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_facet_subtract"
     )
@@ -904,7 +988,10 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB):
                 f"Scanning log_VLBI_facet_imaging_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
             )
             with open(
-                f"log_VLBI_facet_imaging_{field['target_name']}_{field['sas_id_target']}.txt"
+                os.path.join(
+                    logsdir,
+                    f"log_VLBI_facet_imaging_{field['target_name']}_{field['sas_id_target']}.txt",
+                )
             ) as f_out:
                 for line in f_out.readlines():
                     print(line)
@@ -958,6 +1045,9 @@ def run_prepare_ddf_subtract(field):
         f"Preparing input for DDF subtract of {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay")
     target_ms_path = target_path / "results_VLBI_delay-calibration"
     mses_unaveraged = list(target_ms_path.glob("*.dp3concat"))
@@ -977,7 +1067,6 @@ def run_prepare_ddf_subtract(field):
         print(f"Using LINC MSes at {linc_path}")
         linc_ms_path = linc_path / "results_LINC_target" / "results"
         mses_unaveraged = list(linc_ms_path.glob("*.dp3concat"))
-    mses_averaged = list(target_ms_path.glob("*_pre-cal.ms"))
     mses_unaveraged_pilot = list(target_ms_path.glob("*.dp3concat"))
     if not mses_unaveraged:
         raise RuntimeError(
@@ -1048,6 +1137,9 @@ def run_prepare_ddf_subtract(field):
 def run_prepare_ddf(field):
     print(f"Preparing DDF input for {field['target_name']} {field['sas_id_target']}")
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay")
     target_ms_path = target_path / "results_VLBI_delay-calibration"
     mses_unaveraged = list(target_ms_path.glob("*.dp3concat"))
@@ -1137,6 +1229,9 @@ def run_prepare_ddf(field):
 def run_pilot_process_ddf_toil(field, db: FlocsDB):
     print(f"Running ddf subtract for {field['target_name']} {field['sas_id_target']}")
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
     target_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_delay-calibration"
     )
@@ -1164,7 +1259,10 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
             f"Scanning log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
         )
         with open(
-            f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt"
+            os.path.join(
+                logsdir,
+                f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt",
+            )
         ) as f_out:
             for line in f_out.readlines():
                 print(line)
