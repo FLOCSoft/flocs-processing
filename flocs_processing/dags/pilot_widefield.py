@@ -493,73 +493,7 @@ def pilot_widefield():
         if field["status_ddf"] == PIPELINE_STATUS.finished:
             return field
         else:
-            print(
-                f"Starting ddf-pipeline for {field['target_name']} {field['sas_id_target']}"
-            )
-            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-            target_path = get_most_recent_run(
-                outdir, field["sas_id_target"], "VLBI_delay-calibration"
-            )
-            target_ms_path = target_path / "results_VLBI_delay-calibration"
-            if not list(target_ms_path.glob("*pre-cal.ms")):
-                target_path = get_most_recent_run(
-                    outdir, field["sas_id_target"], "LINC_target"
-                )
-                target_ms_path = target_path / "results_LINC_target" / "results"
-
-            cmd = f"flocs-run ddf-pipeline --scheduler slurm --slurm-time 72:00:00 --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --config-file {DDF_CONFIG} {target_ms_path}"
-            print(cmd)
-            CURRENT_DB.set_status_processing(
-                field["target_name"], "ddf", field["sas_id_target"]
-            )
-            with (
-                open(
-                    f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}.txt",
-                    "w+",
-                ) as f_out,
-                open(
-                    f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                    "w+",
-                ) as f_err,
-            ):
-                proc = subprocess.run(
-                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                )
-                jobid = None
-                if not proc.returncode:
-                    f_out.seek(0)
-                    for line in f_out.readlines():
-                        if "Submitted batch job" in line:
-                            jobid = line.strip().split()[-1]
-                else:
-                    raise RuntimeError("Failed to submit job.")
-
-                if not jobid:
-                    raise RuntimeError("Failed to retrieve job id")
-                else:
-                    while True:
-                        print(f"Polling DDF-pipeine job {jobid}")
-                        poll_cmd = f"sacct -X -j {jobid} --format=State --noheader"
-                        status = subprocess.run(
-                            poll_cmd, shell=True, text=True, capture_output=True
-                        ).stdout.strip()
-                        if (status == "RUNNING") or (status == "PENDING"):
-                            time.sleep(60)
-                        elif status == "COMPLETED":
-                            CURRENT_DB.set_status_finished(
-                                field["target_name"],
-                                "ddf_subtract",
-                                field["sas_id_target"],
-                            )
-                            break
-                        elif (
-                            (status == "FAILED")
-                            or ("TIMEOUT" in status)
-                            or ("CANCELLED" in status)
-                        ):
-                            raise RuntimeError(
-                                f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
-                            )
+            launch_ddf_pipeline(field, CURRENT_DB)
             return field
 
     @task

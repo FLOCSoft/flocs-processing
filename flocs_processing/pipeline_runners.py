@@ -67,7 +67,7 @@ def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
         field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"]
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     cmd = f"flocs-run linc calibrator --runner cwltool --scheduler slurm --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
@@ -134,7 +134,7 @@ def run_linc_calibrator_toil(field, calibrator_field: int, db: FlocsDB):
         field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"]
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
@@ -180,7 +180,7 @@ def run_linc_target_cwltool(field, db: FlocsDB):
     )
     ms_folder = f"L{field['sas_id_target']}"
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     calibrator_path = get_most_recent_run(
@@ -254,7 +254,7 @@ def run_linc_target_toil(field, db: FlocsDB):
     )
     ms_folder = f"L{field['sas_id_target']}"
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     calibrator_path = get_most_recent_run(
@@ -304,7 +304,7 @@ def run_pilot_delay_cwltool(field, db: FlocsDB):
         f"Processing delay calibration for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
@@ -415,7 +415,7 @@ def run_pilot_delay_toil(field, db: FlocsDB):
         f"Processing delay calibration for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
@@ -532,7 +532,7 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB):
         f"Processing ILT dd calibration for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     if "status_ddf" not in field:
@@ -631,7 +631,7 @@ def run_pilot_ddcal_toil(field, db: FlocsDB):
         f"Processing ILT dd calibration for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     if "status_ddf" not in field:
@@ -740,7 +740,7 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
         f"Processing ILT intermediate resolution imaging for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(
@@ -837,7 +837,7 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
         f"Processing ILT facet subtraction for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(
@@ -950,7 +950,7 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB):
         f"Processing ILT facet imaging for {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(
@@ -1045,7 +1045,7 @@ def run_prepare_ddf_subtract(field):
         f"Preparing input for DDF subtract of {field['target_name']} {field['sas_id_target']}"
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay")
@@ -1137,7 +1137,7 @@ def run_prepare_ddf_subtract(field):
 def run_prepare_ddf(field):
     print(f"Preparing DDF input for {field['target_name']} {field['sas_id_target']}")
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay")
@@ -1229,7 +1229,7 @@ def run_prepare_ddf(field):
 def run_pilot_process_ddf_toil(field, db: FlocsDB):
     print(f"Running ddf subtract for {field['target_name']} {field['sas_id_target']}")
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(
@@ -1301,3 +1301,74 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
             )
         else:
             raise RuntimeError
+
+
+def launch_ddf_pipeline(field, db: FlocsDB):
+    print(f"Starting ddf-pipeline for {field['target_name']} {field['sas_id_target']}")
+    outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(logsdir):
+        os.mkdir(logsdir)
+    target_path = get_most_recent_run(
+        outdir, field["sas_id_target"], "VLBI_delay-calibration"
+    )
+    target_ms_path = target_path / "results_VLBI_delay-calibration"
+    if not list(target_ms_path.glob("*pre-cal.ms")):
+        target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
+        target_ms_path = target_path / "results_LINC_target" / "results"
+
+    cmd = f"flocs-run ddf-pipeline --scheduler slurm --slurm-time 72:00:00 --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --config-file {DDF_CONFIG} {target_ms_path}"
+    print(cmd)
+    db.set_status_processing(field["target_name"], "ddf", field["sas_id_target"])
+    with (
+        open(
+            os.path.join(
+                logsdir,
+                f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}.txt",
+            ),
+            "w+",
+        ) as f_out,
+        open(
+            os.path.join(
+                logsdir,
+                f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            ),
+            "w+",
+        ) as f_err,
+    ):
+        proc = subprocess.run(cmd, shell=True, text=True, stdout=f_out, stderr=f_err)
+        jobid = None
+        if not proc.returncode:
+            f_out.seek(0)
+            for line in f_out.readlines():
+                if "Submitted batch job" in line:
+                    jobid = line.strip().split()[-1]
+        else:
+            raise RuntimeError("Failed to submit job.")
+
+        if not jobid:
+            raise RuntimeError("Failed to retrieve job id")
+        else:
+            while True:
+                print(f"Polling DDF-pipeine job {jobid}")
+                poll_cmd = f"sacct -X -j {jobid} --format=State --noheader"
+                status = subprocess.run(
+                    poll_cmd, shell=True, text=True, capture_output=True
+                ).stdout.strip()
+                if (status == "RUNNING") or (status == "PENDING"):
+                    time.sleep(60)
+                elif status == "COMPLETED":
+                    db.set_status_finished(
+                        field["target_name"],
+                        "ddf_subtract",
+                        field["sas_id_target"],
+                    )
+                    break
+                elif (
+                    (status == "FAILED")
+                    or ("TIMEOUT" in status)
+                    or ("CANCELLED" in status)
+                ):
+                    raise RuntimeError(
+                        f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
+                    )
