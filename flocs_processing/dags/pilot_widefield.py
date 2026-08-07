@@ -50,7 +50,8 @@ DDF_CONFIG = parser["DEFAULT"]["DDF_CONFIG"]
 FLUX_CALIBRATOR_TEMPLATE = parser["DEFAULT"]["FLUX_CALIBRATOR_TEMPLATE"]
 NEEDS_MANUAL_APPROVAL_DELAY = bool(parser["DEFAULT"]["NEEDS_MANUAL_APPROVAL_DELAY"])
 
-CWL_RUNNER_LINC = "cwltool"
+CWL_RUNNER_LINC_CALIBRATOR = "cwltool"
+CWL_RUNNER_LINC_TARGET = "toil"
 
 CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
 
@@ -148,6 +149,117 @@ def run_linc_calibrator_toil(field, calibrator_field: int):
                 field["target_name"],
                 f"calibrator{calibrator_field}",
                 field["sas_id_target"],
+            )
+        else:
+            raise RuntimeError
+
+
+def run_linc_target_cwltool(field):
+    print(
+        f"Processing target observation {field['target_name']} {field['sas_id_target']} with calibrator {field['sas_id_calibrator_final']}"
+    )
+    ms_folder = f"L{field['sas_id_target']}"
+    outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    calibrator_path = get_most_recent_run(
+        outdir, field["sas_id_calibrator_final"], "LINC_calibrator"
+    )
+    calibrator_solutions = (
+        calibrator_path / "results_LINC_calibrator" / "cal_solutions.h5"
+    )
+    CURRENT_DB.set_status_processing(
+        field["target_name"], "target", field["sas_id_target"]
+    )
+    cmd = f"flocs-run linc target --runner cwltool --scheduler slurm --slurm-cores 64 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
+    print(cmd)
+    with (
+        open(
+            f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
+            "w+",
+        ) as f_out,
+        open(
+            f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            "w+",
+        ) as f_err,
+    ):
+        proc = subprocess.run(cmd, shell=True, text=True, stdout=f_out, stderr=f_err)
+        jobid = None
+        if not proc.returncode:
+            f_out.seek(0)
+            for line in f_out.readlines():
+                if "Submitted batch job" in line:
+                    jobid = line.strip().split()[-1]
+        else:
+            raise RuntimeError("Failed to submit job.")
+
+        if not jobid:
+            raise RuntimeError("Failed to retrieve job id")
+        else:
+            while True:
+                print(f"Polling LINC target job {jobid}")
+                poll_cmd = f"sacct -X -j {jobid} --format=State --noheader"
+                status = subprocess.run(
+                    poll_cmd, shell=True, text=True, capture_output=True
+                ).stdout.strip()
+                if (status == "RUNNING") or (status == "PENDING"):
+                    time.sleep(60)
+                elif status == "COMPLETED":
+                    CURRENT_DB.set_status_finished(
+                        field["target_name"],
+                        "target",
+                        field["sas_id_target"],
+                    )
+                    break
+                elif (
+                    (status == "FAILED")
+                    or ("TIMEOUT" in status)
+                    or ("CANCELLED" in status)
+                ):
+                    raise RuntimeError(
+                        f"LINC target for {field['target_name']} {field['sas_id_target']} failed."
+                    )
+
+
+def run_linc_target_toil(field):
+    print(
+        f"Processing target observation {field['target_name']} {field['sas_id_target']} with calibrator {field['sas_id_calibrator_final']}"
+    )
+    ms_folder = f"L{field['sas_id_target']}"
+    outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    calibrator_path = get_most_recent_run(
+        outdir, field["sas_id_calibrator_final"], "LINC_calibrator"
+    )
+    calibrator_solutions = (
+        calibrator_path / "results_LINC_calibrator" / "cal_solutions.h5"
+    )
+    CURRENT_DB.set_status_processing(
+        field["target_name"], "target", field["sas_id_target"]
+    )
+    cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
+    print(cmd)
+    with (
+        open(
+            f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
+            "w+",
+        ) as f_out,
+        open(
+            f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            "w+",
+        ) as f_err,
+    ):
+        proc = subprocess.run(cmd, shell=True, text=True, stdout=f_out, stderr=f_err)
+        success = False
+        pattern = re.compile(r"Workflow.* stopped. Success: True")
+        if not proc.returncode:
+            f_err.seek(0)
+            if pattern.search(f_err.read()):
+                success = True
+        if success:
+            CURRENT_DB.set_status_finished(
+                field["target_name"], "target", field["sas_id_target"]
             )
         else:
             raise RuntimeError
@@ -394,9 +506,9 @@ def pilot_widefield():
             )
             return field
         else:
-            if CWL_RUNNER_LINC == "cwltool":
+            if CWL_RUNNER_LINC_CALIBRATOR == "cwltool":
                 run_linc_calibrator_cwltool(field, calibrator_field=1)
-            elif CWL_RUNNER_LINC == "toil":
+            elif CWL_RUNNER_LINC_CALIBRATOR == "toil":
                 run_linc_calibrator_toil(field, calibrator_field=1)
             else:
                 raise RuntimeError("Invalid CWL runner specified.")
@@ -413,9 +525,9 @@ def pilot_widefield():
             )
             return field
         else:
-            if CWL_RUNNER_LINC == "cwltool":
+            if CWL_RUNNER_LINC_CALIBRATOR == "cwltool":
                 run_linc_calibrator_cwltool(field, calibrator_field=2)
-            elif CWL_RUNNER_LINC == "toil":
+            elif CWL_RUNNER_LINC_CALIBRATOR == "toil":
                 run_linc_calibrator_toil(field, calibrator_field=2)
             else:
                 raise RuntimeError("Invalid CWL runner specified.")
@@ -518,49 +630,12 @@ def pilot_widefield():
         ):
             return field
         else:
-            print(
-                f"Processing target observation {field['target_name']} {field['sas_id_target']} with calibrator {field['sas_id_calibrator_final']}"
-            )
-            ms_folder = f"L{field['sas_id_target']}"
-            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-            calibrator_path = get_most_recent_run(
-                outdir, field["sas_id_calibrator_final"], "LINC_calibrator"
-            )
-            calibrator_solutions = (
-                calibrator_path / "results_LINC_calibrator" / "cal_solutions.h5"
-            )
-            CURRENT_DB.set_status_processing(
-                field["target_name"], "target", field["sas_id_target"]
-            )
-            cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
-            if not os.path.isdir(outdir):
-                os.mkdir(outdir)
-            print(cmd)
-            with (
-                open(
-                    f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
-                    "w+",
-                ) as f_out,
-                open(
-                    f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                    "w+",
-                ) as f_err,
-            ):
-                proc = subprocess.run(
-                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                )
-                success = False
-                pattern = re.compile(r"Workflow.* stopped. Success: True")
-                if not proc.returncode:
-                    f_err.seek(0)
-                    if pattern.search(f_err.read()):
-                        success = True
-                if success:
-                    CURRENT_DB.set_status_finished(
-                        field["target_name"], "target", field["sas_id_target"]
-                    )
-                else:
-                    raise RuntimeError
+            if CWL_RUNNER_LINC_TARGET == "cwltool":
+                run_linc_target_cwltool(field)
+            elif CWL_RUNNER_LINC_TARGET == "toil":
+                run_linc_target_toil(field)
+            else:
+                raise RuntimeError("Invalid CWL runner specified.")
         return field
 
     @task
