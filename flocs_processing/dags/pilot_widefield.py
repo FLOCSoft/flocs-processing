@@ -12,6 +12,7 @@ from flocs_processing.pipeline_runners import (
     run_pilot_facet_imaging_toil,
     run_pilot_facet_subtract_toil,
     run_pilot_intermediate_image_toil,
+    run_pilot_process_ddf_toil,
     run_prepare_ddf,
     run_prepare_ddf_subtract,
 )
@@ -567,80 +568,7 @@ def pilot_widefield():
         if field["status_vlbi_ddf_subtract"] == PIPELINE_STATUS.finished:
             return field
         else:
-            print(
-                f"Running ddf subtract for {field['target_name']} {field['sas_id_target']}"
-            )
-            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-            target_path = get_most_recent_run(
-                outdir, field["sas_id_target"], "VLBI_delay-calibration"
-            )
-            target_ms_path = target_path / "results_VLBI_delay-calibration"
-            print(f"Using data at: {target_path}/*.dp3concat")
-
-            ddf_path = get_most_recent_run(
-                outdir, field["sas_id_target"], "DDF-pipeline"
-            )
-            ddf_sols_path = ddf_path / "SOLSDIR"
-            print(f"Using DDF run at: {ddf_path}")
-
-            context = get_current_context()
-            if context["ti"].try_number == 1 or (
-                not os.path.isfile(
-                    f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt"
-                )
-            ):
-                CURRENT_DB.set_status_processing(
-                    field["target_name"], "ddf_subtract", field["sas_id_target"]
-                )
-                cmd = f"flocs-run vlbi process-ddf --runner toil --record-toil-stats --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix .dp3concat --ddf-rundir {ddf_path} --solsdir {ddf_sols_path} --do-subtraction {target_ms_path}"
-            else:
-                # Extract the previous working directory
-                flocs_workdir = ""
-                print(
-                    f"Scanning log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
-                )
-                with open(
-                    f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt"
-                ) as f_out:
-                    for line in f_out.readlines():
-                        print(line)
-                        if "Running workflow with" in line:
-                            flocs_workdir = line.split(" ")[-1].strip()
-                            break
-                if not flocs_workdir:
-                    raise RuntimeError(
-                        "Could not retrieve PILOT workdir. Flocs probably crashed before launching."
-                    )
-                print(f"Resuming failed PILOT run in {flocs_workdir}")
-                cmd = f"flocs-run vlbi process-ddf --runner toil --record-toil-stats --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix .dp3concat --ddf-rundir {ddf_path} --solsdir {ddf_sols_path} --do-subtraction {target_ms_path}"
-            if not os.path.isdir(outdir):
-                os.mkdir(outdir)
-            print(cmd)
-            with (
-                open(
-                    f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt",
-                    "w+",
-                ) as f_out,
-                open(
-                    f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                    "w+",
-                ) as f_err,
-            ):
-                proc = subprocess.run(
-                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                )
-                success = False
-                pattern = re.compile(r"Workflow.* stopped. Success: True")
-                if not proc.returncode:
-                    f_err.seek(0)
-                    if pattern.search(f_err.read()):
-                        success = True
-                if success:
-                    CURRENT_DB.set_status_finished(
-                        field["target_name"], "ddf_subtract", field["sas_id_target"]
-                    )
-                else:
-                    raise RuntimeError
+            run_pilot_process_ddf_toil(field, CURRENT_DB)
             return field
 
     @task
