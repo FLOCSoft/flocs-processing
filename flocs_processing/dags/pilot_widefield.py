@@ -25,12 +25,12 @@ if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
         "FLOCS_AIRFLOW_CONFIG environment variable not set. Please point this to a valid configuration file."
     )
 
-CONFIG_FILE = os.getenv("FLOCS_AIRFLOW_CONFIG")
+CONFIG_FILE: str = os.getenv("FLOCS_AIRFLOW_CONFIG") or ""
 if not os.path.isfile(CONFIG_FILE):
     raise RuntimeError(f"{CONFIG_FILE} is not a valid file")
 
 parser = configparser.ConfigParser()
-parser.optionxform = str
+parser.optionxform = str  # ty: ignore[invalid-assignment]
 with open(CONFIG_FILE, "r") as config:
     parser.read_string("[DEFAULT]\n" + config.read())
 
@@ -52,6 +52,7 @@ NEEDS_MANUAL_APPROVAL_DELAY = bool(parser["DEFAULT"]["NEEDS_MANUAL_APPROVAL_DELA
 
 CWL_RUNNER_LINC_CALIBRATOR = "cwltool"
 CWL_RUNNER_LINC_TARGET = "toil"
+CWL_RUNNER_PILOT_DELAY = "toil"
 
 CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
 
@@ -261,6 +262,220 @@ def run_linc_target_toil(field):
             CURRENT_DB.set_status_finished(
                 field["target_name"], "target", field["sas_id_target"]
             )
+        else:
+            raise RuntimeError
+
+
+def run_pilot_delay_cwltool(field):
+    print(
+        f"Processing delay calibration for {field['target_name']} {field['sas_id_target']}"
+    )
+    outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
+    target_ms_path = target_path / "results_LINC_target" / "results"
+    CURRENT_DB.set_status_processing(
+        field["target_name"], "vlbi_delay", field["sas_id_target"]
+    )
+
+    delay_cat = os.path.join(outdir, "delay_calibrators.csv")
+    image_cat = os.path.join(outdir, "image_catalogue.csv")
+
+    if not os.path.isfile(delay_cat) or not os.path.isfile(image_cat):
+        ms = list(target_ms_path.glob("*.dp3concat"))[0]
+        cmd = f"lofar-vlbi-plot --force --output_dir {outdir} --MS {ms}"
+        with (
+            open(
+                f"log_plot_field_{field['target_name']}_{field['sas_id_target']}.txt",
+                "w+",
+            ) as f_out,
+            open(
+                f"log_plot_field_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                "w+",
+            ) as f_err,
+        ):
+            proc = subprocess.run(
+                cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+            )
+            delay_cat = os.path.join(outdir, "delay_calibrators.csv")
+            image_cat = os.path.join(outdir, "image_catalogue.csv")
+
+            if not os.path.isfile(delay_cat):
+                raise RuntimeError("Delay calibrator catalogue is missing or invalid.")
+            if not os.path.isfile(image_cat):
+                raise RuntimeError("Image source catalogue is missing or invalid.")
+
+    proc = subprocess.run(
+        "detect_bad_slurm_nodes.sh",
+        shell=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    )
+    bad_nodes = proc.stdout.strip()
+    if bad_nodes:
+        print(f"Excluding the following bad nodes from scheduling: {bad_nodes}")
+        os.environ["TOIL_SLURM_ARGS"] = f"--exclude={bad_nodes}"
+
+    cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --runner cwltool --scheduler slurm --slurm-cores 64 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} --apply-delay-solutions {target_ms_path}"
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
+    print(cmd)
+    with (
+        open(
+            f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+            "w+",
+        ) as f_out,
+        open(
+            f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            "w+",
+        ) as f_err,
+    ):
+        proc = subprocess.run(cmd, shell=True, text=True, stdout=f_out, stderr=f_err)
+        jobid = None
+        if not proc.returncode:
+            f_out.seek(0)
+            for line in f_out.readlines():
+                if "Submitted batch job" in line:
+                    jobid = line.strip().split()[-1]
+        else:
+            raise RuntimeError("Failed to submit job.")
+
+        if not jobid:
+            raise RuntimeError("Failed to retrieve job id")
+        else:
+            while True:
+                print(f"Polling LINC target job {jobid}")
+                poll_cmd = f"sacct -X -j {jobid} --format=State --noheader"
+                status = subprocess.run(
+                    poll_cmd, shell=True, text=True, capture_output=True
+                ).stdout.strip()
+                if (status == "RUNNING") or (status == "PENDING"):
+                    time.sleep(60)
+                elif status == "COMPLETED":
+                    if NEEDS_MANUAL_APPROVAL_DELAY:
+                        CURRENT_DB.set_status_await_approval(
+                            field["target_name"], "vlbi_delay", field["sas_id_target"]
+                        )
+                    else:
+                        CURRENT_DB.set_status_finished(
+                            field["target_name"], "vlbi_delay", field["sas_id_target"]
+                        )
+                    break
+                elif (
+                    (status == "FAILED")
+                    or ("TIMEOUT" in status)
+                    or ("CANCELLED" in status)
+                ):
+                    raise RuntimeError(
+                        f"LINC target for {field['target_name']} {field['sas_id_target']} failed."
+                    )
+
+
+def run_pilot_delay_toil(field):
+    print(
+        f"Processing delay calibration for {field['target_name']} {field['sas_id_target']}"
+    )
+    outdir = os.path.join(OUTPUT_DIR, field["target_name"])
+    target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
+    target_ms_path = target_path / "results_LINC_target" / "results"
+    CURRENT_DB.set_status_processing(
+        field["target_name"], "vlbi_delay", field["sas_id_target"]
+    )
+
+    delay_cat = os.path.join(outdir, "delay_calibrators.csv")
+    image_cat = os.path.join(outdir, "image_catalogue.csv")
+
+    if not os.path.isfile(delay_cat) or not os.path.isfile(image_cat):
+        ms = list(target_ms_path.glob("*.dp3concat"))[0]
+        cmd = f"lofar-vlbi-plot --force --output_dir {outdir} --MS {ms}"
+        with (
+            open(
+                f"log_plot_field_{field['target_name']}_{field['sas_id_target']}.txt",
+                "w+",
+            ) as f_out,
+            open(
+                f"log_plot_field_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                "w+",
+            ) as f_err,
+        ):
+            proc = subprocess.run(
+                cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+            )
+            delay_cat = os.path.join(outdir, "delay_calibrators.csv")
+            image_cat = os.path.join(outdir, "image_catalogue.csv")
+
+            if not os.path.isfile(delay_cat):
+                raise RuntimeError("Delay calibrator catalogue is missing or invalid.")
+            if not os.path.isfile(image_cat):
+                raise RuntimeError("Image source catalogue is missing or invalid.")
+
+    proc = subprocess.run(
+        "detect_bad_slurm_nodes.sh",
+        shell=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    )
+    bad_nodes = proc.stdout.strip()
+    if bad_nodes:
+        print(f"Excluding the following bad nodes from scheduling: {bad_nodes}")
+        os.environ["TOIL_SLURM_ARGS"] = f"--exclude={bad_nodes}"
+
+    context = get_current_context()
+    if context["ti"].try_number == 1 or (
+        not os.path.isfile(
+            f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
+        )
+    ):
+        cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} --apply-delay-solutions {target_ms_path}"
+    else:
+        # Extract the previous working directory
+        flocs_workdir = ""
+        print(
+            f"Scanning log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
+        )
+        with open(
+            f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
+        ) as f_out:
+            for line in f_out.readlines():
+                print(line)
+                if "Running workflow with" in line:
+                    flocs_workdir = line.split(" ")[-1].strip()
+                    break
+        if not flocs_workdir:
+            raise RuntimeError(
+                "Could not retrieve PILOT workdir. Flocs probably crashed before launching."
+            )
+        print(f"Resuming failed PILOT run in {flocs_workdir}")
+        cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} {target_ms_path}"
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
+    print(cmd)
+    with (
+        open(
+            f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+            "w+",
+        ) as f_out,
+        open(
+            f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            "w+",
+        ) as f_err,
+    ):
+        proc = subprocess.run(cmd, shell=True, text=True, stdout=f_out, stderr=f_err)
+        success = False
+        pattern = re.compile(r"Workflow.* stopped. Success: True")
+        if not proc.returncode:
+            f_err.seek(0)
+            if pattern.search(f_err.read()):
+                success = True
+
+        if success:
+            if NEEDS_MANUAL_APPROVAL_DELAY:
+                CURRENT_DB.set_status_await_approval(
+                    field["target_name"], "vlbi_delay", field["sas_id_target"]
+                )
+            else:
+                CURRENT_DB.set_status_finished(
+                    field["target_name"], "vlbi_delay", field["sas_id_target"]
+                )
         else:
             raise RuntimeError
 
@@ -644,126 +859,15 @@ def pilot_widefield():
 
     @task(retries=0, retry_delay=datetime.timedelta(seconds=5))
     def run_vlbi_delay(field):
-        if (field["status_vlbi_delay"] == PIPELINE_STATUS.finished) or (
-            field["status_vlbi_delay"] == PIPELINE_STATUS.await_approval
-        ):
+        if field["status_vlbi_delay"] == PIPELINE_STATUS.finished:
             return field
         else:
-            print(
-                f"Processing delay calibration for {field['target_name']} {field['sas_id_target']}"
-            )
-            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-            target_path = get_most_recent_run(
-                outdir, field["sas_id_target"], "LINC_target"
-            )
-            target_ms_path = target_path / "results_LINC_target" / "results"
-            CURRENT_DB.set_status_processing(
-                field["target_name"], "vlbi_delay", field["sas_id_target"]
-            )
-
-            delay_cat = os.path.join(outdir, "delay_calibrators.csv")
-            image_cat = os.path.join(outdir, "image_catalogue.csv")
-
-            if not os.path.isfile(delay_cat) or not os.path.isfile(image_cat):
-                ms = list(target_ms_path.glob("*.dp3concat"))[0]
-                cmd = f"lofar-vlbi-plot --force --output_dir {outdir} --MS {ms}"
-                with (
-                    open(
-                        f"log_plot_field_{field['target_name']}_{field['sas_id_target']}.txt",
-                        "w+",
-                    ) as f_out,
-                    open(
-                        f"log_plot_field_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                        "w+",
-                    ) as f_err,
-                ):
-                    proc = subprocess.run(
-                        cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                    )
-                    delay_cat = os.path.join(outdir, "delay_calibrators.csv")
-                    image_cat = os.path.join(outdir, "image_catalogue.csv")
-
-                    if not os.path.isfile(delay_cat):
-                        raise RuntimeError(
-                            "Delay calibrator catalogue is missing or invalid."
-                        )
-                    if not os.path.isfile(image_cat):
-                        raise RuntimeError(
-                            "Image source catalogue is missing or invalid."
-                        )
-
-            proc = subprocess.run(
-                "detect_bad_slurm_nodes.sh",
-                shell=True,
-                text=True,
-                stdout=subprocess.PIPE,
-            )
-            bad_nodes = proc.stdout.strip()
-            if bad_nodes:
-                print(f"Excluding the following bad nodes from scheduling: {bad_nodes}")
-                os.environ["TOIL_SLURM_ARGS"] = f"--exclude={bad_nodes}"
-
-            context = get_current_context()
-            if context["ti"].try_number == 1 or (
-                not os.path.isfile(
-                    f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
-                )
-            ):
-                cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} --apply-delay-solutions {target_ms_path}"
+            if CWL_RUNNER_PILOT_DELAY == "cwltool":
+                run_pilot_delay_cwltool(field)
+            elif CWL_RUNNER_PILOT_DELAY == "toil":
+                run_pilot_delay_toil(field)
             else:
-                # Extract the previous working directory
-                flocs_workdir = ""
-                print(
-                    f"Scanning log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
-                )
-                with open(
-                    f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
-                ) as f_out:
-                    for line in f_out.readlines():
-                        print(line)
-                        if "Running workflow with" in line:
-                            flocs_workdir = line.split(" ")[-1].strip()
-                            break
-                if not flocs_workdir:
-                    raise RuntimeError(
-                        "Could not retrieve PILOT workdir. Flocs probably crashed before launching."
-                    )
-                print(f"Resuming failed PILOT run in {flocs_workdir}")
-                cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} {target_ms_path}"
-            if not os.path.isdir(outdir):
-                os.mkdir(outdir)
-            print(cmd)
-            with (
-                open(
-                    f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
-                    "w+",
-                ) as f_out,
-                open(
-                    f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                    "w+",
-                ) as f_err,
-            ):
-                proc = subprocess.run(
-                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                )
-                success = False
-                pattern = re.compile(r"Workflow.* stopped. Success: True")
-                if not proc.returncode:
-                    f_err.seek(0)
-                    if pattern.search(f_err.read()):
-                        success = True
-
-                if success:
-                    if NEEDS_MANUAL_APPROVAL_DELAY:
-                        CURRENT_DB.set_status_await_approval(
-                            field["target_name"], "vlbi_delay", field["sas_id_target"]
-                        )
-                    else:
-                        CURRENT_DB.set_status_finished(
-                            field["target_name"], "vlbi_delay", field["sas_id_target"]
-                        )
-                else:
-                    raise RuntimeError
+                raise RuntimeError("Invalid CWL runner specified.")
         return field
 
     @task
@@ -1394,7 +1498,7 @@ def pilot_widefield():
 
     @task
     def run_vlbi_facet_subtract(field):
-        field = dict(CURRENT_DB.CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if (field["status_vlbi_facet_subtract"] == PIPELINE_STATUS.finished) or (
             field["status_vlbi_facet_subtract"] == PIPELINE_STATUS.processing
         ):
