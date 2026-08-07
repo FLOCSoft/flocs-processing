@@ -153,7 +153,7 @@ def update_field(
     ] = "processing_flocs",
 ):
     db = FlocsDB(dbname=dbname, db_table=table_name)
-    if pipeline != "all":
+    if pipeline == "all":
         p_list = list(get_args(PIPELINES))
         p_list.remove("all")
         for p in p_list:
