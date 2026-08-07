@@ -185,7 +185,7 @@ def update_field(
 
 
 @app.command()
-def start_airflow_processing(
+def deploy_airflow(
     airflow_cores: Annotated[
         int, Parameter(help="Number of cores to give to Airflow.")
     ] = 6,
