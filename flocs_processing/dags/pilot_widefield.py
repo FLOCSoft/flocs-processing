@@ -475,7 +475,7 @@ def pilot_widefield():
                 score2 = assess_cal2[0]["score"]
                 print(f"Calibrator 1 score: {score1}")
                 print(f"Calibrator 2 score: {score2}")
-                match score1 < score2:
+                match score1 <= score2:
                     case True:
                         print("Best score for calibrator1")
                         CURRENT_DB.set_final_calibrator(
