@@ -1,4 +1,3 @@
-from threading import currentThread
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
 from flocs_processing.pipeline_runners import (
     get_most_recent_run,
@@ -13,6 +12,7 @@ from flocs_processing.pipeline_runners import (
     run_pilot_facet_imaging_toil,
     run_pilot_facet_subtract_toil,
     run_pilot_intermediate_image_toil,
+    run_prepare_ddf_subtract,
 )
 
 import configparser
@@ -761,104 +761,7 @@ def pilot_widefield():
 
     @task
     def prepare_ddf_subtract(field):
-        print(
-            f"Preparing input for DDF subtract of {field['target_name']} {field['sas_id_target']}"
-        )
-        outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-        target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay")
-        target_ms_path = target_path / "results_VLBI_delay-calibration"
-        mses_unaveraged = list(target_ms_path.glob("*.dp3concat"))
-        delay_sols = ""
-        if not mses_unaveraged:
-            print(
-                "No MSes found in delay-calibration output, will apply delay solutions to LINC."
-            )
-            sols_path = get_most_recent_run(
-                outdir, field["sas_id_target"], "VLBI_delay"
-            )
-            sols_path = sols_path / "results_VLBI_delay-calibration"
-            delay_sols = list(
-                sols_path.glob("merged*selfcalcycle???_linearfulljones*.h5")
-            )[0]
-            print(f"Using PILOT delay calibration solutions: {delay_sols}")
-
-            linc_path = get_most_recent_run(
-                outdir, field["sas_id_target"], "LINC_target"
-            )
-            print(f"Using LINC MSes at {linc_path}")
-            linc_ms_path = linc_path / "results_LINC_target" / "results"
-            mses_unaveraged = list(linc_ms_path.glob("*.dp3concat"))
-        mses_averaged = list(target_ms_path.glob("*_pre-cal.ms"))
-        mses_unaveraged_pilot = list(target_ms_path.glob("*.dp3concat"))
-        if not mses_unaveraged:
-            raise RuntimeError(
-                f"No unaveraged input MSes found at {linc_ms_path}/*.dp3concat"
-            )
-        if mses_unaveraged_pilot and (
-            len(mses_unaveraged_pilot) == len(mses_unaveraged)
-        ):
-            print("Appropriate input exists for ddf-pipeline.")
-            return field
-
-        jobids = []
-        averaged_mses = []
-        for ms in mses_unaveraged:
-            out_ms = target_ms_path / f"{ms.stem}.dp3concat"
-            if out_ms.exists():
-                print(f"Skipping {out_ms.name}, already exists.")
-                averaged_mses.append(str(out_ms))
-                continue
-            if delay_sols:
-                h5 = h5parm(str(delay_sols))
-                ss = h5.getSolset("sol000")
-                # We only expect there to be one direction: the delay calibrator.
-                dirname = list(ss.getSou())[0]
-                sourcedir = ss.getSou()[dirname]
-                delaydir = f"[{sourcedir[0]},{sourcedir[1]}]"
-                dp3_cmd = f"apptainer exec $CWL_SINGULARITY_CACHE/astronrd_linc_latest.sif DP3 numthreads=2 msin={ms} msout={out_ms} msout.uvwcompression=False  msout.antennacompression=False msout.scalarflags=False msout.storagemanager=Dysco steps=[applybeamdelay,applycal,applybeamtarget] applybeamdelay.type=applybeam applybeamdelay.beammode=full applybeamdelay.updateweights=True applybeamdelay.direction={delaydir} applycal.parmdb={delay_sols} applycal.correction=fulljones applycal.soltab=[amplitude000,phase000] applybeamtarget.type=applybeam applybeamtarget.beammode=full applybeamtarget.updateweights=True"
-                print(dp3_cmd)
-            else:
-                dp3_cmd = f"apptainer exec $CWL_SINGULARITY_CACHE/astronrd_linc_latest.sif DP3 numthreads=2 msin={ms} msout={out_ms} msout.uvwcompression=False  msout.antennacompression=False msout.scalarflags=False msout.storagemanager=Dysco steps=[]"
-            submit_cmd = f'sbatch -A {SLURM_ACCOUNT} -p {SLURM_QUEUE} --time=08:00:00 -c 2 --job-name=dp3_avg_{ms.stem} --wrap="{dp3_cmd}"'
-            print(f"Submitting: {submit_cmd}")
-            proc = subprocess.run(
-                submit_cmd, shell=True, text=True, capture_output=True
-            )
-            if proc.returncode:
-                print(proc.stdout)
-                print(proc.stderr)
-                raise RuntimeError(f"Failed to submit SLURM job for {ms}")
-            jobid = proc.stdout.strip().split()[-1]
-            print(f"Submitted job {jobid} for {ms.name}")
-            jobids.append((jobid, out_ms))
-            averaged_mses.append(str(out_ms))
-
-        while jobids:
-            print(f"Polling {len(jobids)} SLURM jobs...")
-            remaining = []
-            for jobid, out_ms in jobids:
-                poll_cmd = f"sacct -X -j {jobid} --format=State --noheader"
-                status = subprocess.run(
-                    poll_cmd, shell=True, text=True, capture_output=True
-                ).stdout.strip()
-                if status == "COMPLETED":
-                    print(f"Job {jobid} completed ({out_ms.name})")
-                elif (
-                    (status == "FAILED")
-                    or ("TIMEOUT" in status)
-                    or ("CANCELLED" in status)
-                ):
-                    raise RuntimeError(
-                        f"DP3 averaging job {jobid} failed for {out_ms.name}"
-                    )
-                elif status in ("PENDING", "RUNNING"):
-                    remaining.append((jobid, out_ms))
-                else:
-                    remaining.append((jobid, out_ms))
-            jobids = remaining
-            time.sleep(30)
-
-        mses_averaged = list(target_ms_path.glob("*_pre-cal.ms"))
+        mses_averaged = run_prepare_ddf_subtract(field, CURRENT_DB)
         if mses_averaged:
             return field
         else:
