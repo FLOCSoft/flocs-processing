@@ -47,6 +47,13 @@ class FlocsDB:
             print(field)
         return field
 
+    def set_status_nothing(self, name, identifier, target):
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            cursor.execute(
+                f"update {self.TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.nothing.value} where target_name=='{name}' and sas_id_target=='{target}'"
+            )
+
     def set_status_failed(self, name, identifier, target):
         with sqlite3.connect(self.DATABASE) as db:
             cursor = db.cursor()

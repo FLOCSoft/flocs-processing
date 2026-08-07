@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from .db_utils import FlocsDB
 from .processors import FlocsAirflowProcessor
 from cyclopts import Parameter
 from enum import Enum
@@ -6,11 +7,26 @@ import cyclopts
 import functools
 import subprocess
 import structlog
-from typing import Optional, Annotated
+from typing import Annotated, Literal, Optional, get_args
 
 app = cyclopts.App()
 
 logger = structlog.getLogger()
+
+
+PIPELINES = Literal[
+    "all",
+    "calibrator1",
+    "calibrator2",
+    "target",
+    "vlbi_delay",
+    "ddf",
+    "vlbi_ddf_subtract",
+    "vlbi_dd",
+    "vlbi_intermediate_img",
+    "vlbi_facet_subtract",
+    "vlbi_facet_img",
+]
 
 
 @functools.total_ordering
@@ -112,6 +128,60 @@ def add_field(
     return_code = subprocess.run(cmd)
     if not return_code:
         raise RuntimeError(f"Failed to update table {table_name} in database {dbname}.")
+
+
+@app.command()
+def update_field(
+    field_name: Annotated[str, Parameter(help="Name of the source/field to add.")],
+    sas_id_target: Annotated[
+        str,
+        Parameter(help="SAS ID of the target to add.", consume_multiple=True),
+    ],
+    dbname: Annotated[
+        str, Parameter(help="Sqlite3 database from which processing will be done.")
+    ],
+    pipeline: Annotated[
+        PIPELINES,
+        Parameter(help="Pipeline of which to update the status"),
+    ],
+    set_status: Annotated[
+        Literal["nothing", "downloaded", "processing", "failed", "success"],
+        Parameter(help="Set the status of the given pipeline."),
+    ],
+    table_name: Annotated[
+        str, Parameter(help="Database table that will be processed.")
+    ] = "processing_flocs",
+):
+    db = FlocsDB(dbname=dbname, db_table=table_name)
+    if pipeline != "all":
+        p_list = list(get_args(PIPELINES))
+        p_list.remove("all")
+        for p in p_list:
+            logger.info(f"Setting pipeline {p} to status {set_status}")
+            match set_status:
+                case "nothing":
+                    db.set_status_nothing(field_name, p, sas_id_target)
+                case "downloaded":
+                    db.set_status_downloaded(field_name, sas_id_target)
+                case "processing":
+                    db.set_status_processing(field_name, p, sas_id_target)
+                case "failed":
+                    db.set_status_failed(field_name, p, sas_id_target)
+                case "success":
+                    db.set_status_finished(field_name, p, sas_id_target)
+    else:
+        logger.info(f"Setting pipeline {pipeline} to status {set_status}")
+        match set_status:
+            case "nothing":
+                db.set_status_nothing(field_name, pipeline, sas_id_target)
+            case "downloaded":
+                db.set_status_downloaded(field_name, sas_id_target)
+            case "processing":
+                db.set_status_processing(field_name, pipeline, sas_id_target)
+            case "failed":
+                db.set_status_failed(field_name, pipeline, sas_id_target)
+            case "success":
+                db.set_status_finished(field_name, pipeline, sas_id_target)
 
 
 @app.command()
