@@ -9,6 +9,7 @@ from flocs_processing.pipeline_runners import (
     run_pilot_delay_toil,
     run_pilot_ddcal_cwltool,
     run_pilot_ddcal_toil,
+    run_pilot_facet_subtract,
     run_pilot_intermediate_image,
 )
 
@@ -878,114 +879,7 @@ def pilot_widefield():
         ):
             return field
         else:
-            print(
-                f"Processing ILT facet subtraction for {field['target_name']} {field['sas_id_target']}"
-            )
-            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-            target_path = get_most_recent_run(
-                outdir, field["sas_id_target"], "VLBI_process-ddf"
-            )
-            target_ms_path = target_path / "results_VLBI_process-ddf"
-            print(f"Using subtracted data at: {target_path}")
-
-            dd_sols_path = get_most_recent_run(
-                outdir, field["sas_id_target"], "VLBI_dd-calibration"
-            )
-            dd_sols = dd_sols_path / "results_VLBI_dd-calibration" / "merged.h5"
-            print(f"Using dd solutions at: {target_path}")
-
-            if not os.path.isfile(dd_sols):
-                raise AirflowFailException(f"{dd_sols} not found.")
-
-            model_images_path = get_most_recent_run(
-                outdir, field["sas_id_target"], "VLBI_intermediate_resolution_imaging"
-            )
-            model_images = (
-                model_images_path
-                / "results_VLBI_intermediate_resolution_imaging"
-                / "*-????-model-fpb.fits"
-            )
-            model_images = list(model_images_path.glob("*-????-model-fpb.fits"))
-            print(f"Using model image at: {model_images_path}/*-????-model-fpb.fits")
-
-            if not model_images:
-                raise AirflowFailException(
-                    "No suitable intermediate resolution model images found."
-                )
-
-            CURRENT_DB.set_status_processing(
-                field["target_name"], "vlbi_facet_subtract", field["sas_id_target"]
-            )
-
-            context = get_current_context()
-            if context["ti"].try_number == 1 or (
-                not os.path.isfile(
-                    f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt"
-                )
-            ):
-                cmd = f"flocs-run vlbi facet-subtract --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --dd-solutions {dd_sols} --model-image-directory {model_images_path} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
-            else:
-                if field["status_vlbi_facet_subtract"] == PIPELINE_STATUS.downloaded:
-                    # This way we can force a clean restart in the database.
-                    cmd = f"flocs-run vlbi facet-subtract --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --dd-solutions {dd_sols} --model-image-directory {model_images_path} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
-                else:
-                    # Extract the previous working directory
-                    flocs_workdir = ""
-                    print(
-                        f"Scanning log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
-                    )
-                    with open(
-                        f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt"
-                    ) as f_out:
-                        for line in f_out.readlines():
-                            print(line)
-                            if "Running workflow with" in line:
-                                flocs_workdir = line.split(" ")[-1].strip()
-                                break
-                    if not flocs_workdir:
-                        raise RuntimeError(
-                            "Could not retrieve PILOT workdir. Flocs probably crashed before launching."
-                        )
-                    print(f"Resuming failed PILOT run in {flocs_workdir}")
-                    cmd = f"flocs-run vlbi facet-subtract --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --dd-solutions {dd_sols} --model-image-directory {model_images_path} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
-            if not os.path.isdir(outdir):
-                os.mkdir(outdir)
-            print(cmd)
-            with (
-                open(
-                    f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt",
-                    "w+",
-                ) as f_out,
-                open(
-                    f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                    "w+",
-                ) as f_err,
-            ):
-                proc = subprocess.run(
-                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                )
-                success = False
-                pattern = re.compile(r"Workflow.* stopped. Success: True")
-                if not proc.returncode:
-                    f_err.seek(0)
-                    if pattern.search(f_err.read()):
-                        success = True
-                if success:
-                    CURRENT_DB.set_status_finished(
-                        field["target_name"],
-                        "vlbi_facet_subtract",
-                        field["sas_id_target"],
-                    )
-                    CURRENT_DB.set_field_finished(
-                        field["target_name"], field["sas_id_target"]
-                    )
-                else:
-                    CURRENT_DB.set_status_failed(
-                        field["target_name"],
-                        "vlbi_facet_subtract",
-                        field["sas_id_target"],
-                    )
-                    raise RuntimeError
+            run_pilot_facet_subtract(field, CURRENT_DB)
         return field
 
     @task
