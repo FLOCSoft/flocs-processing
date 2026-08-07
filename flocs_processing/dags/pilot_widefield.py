@@ -1,3 +1,4 @@
+from threading import currentThread
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
 from flocs_processing.pipeline_runners import (
     get_most_recent_run,
@@ -318,9 +319,9 @@ def pilot_widefield():
             return field
         else:
             if CWL_RUNNER_LINC_CALIBRATOR == "cwltool":
-                run_linc_calibrator_cwltool(field, calibrator_field=2)
+                run_linc_calibrator_cwltool(field, calibrator_field=2, db=CURRENT_DB)
             elif CWL_RUNNER_LINC_CALIBRATOR == "toil":
-                run_linc_calibrator_toil(field, calibrator_field=2)
+                run_linc_calibrator_toil(field, calibrator_field=2, db=CURRENT_DB)
             else:
                 raise RuntimeError("Invalid CWL runner specified.")
         return field
@@ -423,9 +424,9 @@ def pilot_widefield():
             return field
         else:
             if CWL_RUNNER_LINC_TARGET == "cwltool":
-                run_linc_target_cwltool(field)
+                run_linc_target_cwltool(field, CURRENT_DB)
             elif CWL_RUNNER_LINC_TARGET == "toil":
-                run_linc_target_toil(field)
+                run_linc_target_toil(field, CURRENT_DB)
             else:
                 raise RuntimeError("Invalid CWL runner specified.")
         return field
@@ -440,9 +441,9 @@ def pilot_widefield():
             return field
         else:
             if CWL_RUNNER_PILOT_DELAY == "cwltool":
-                run_pilot_delay_cwltool(field)
+                run_pilot_delay_cwltool(field, CURRENT_DB)
             elif CWL_RUNNER_PILOT_DELAY == "toil":
-                run_pilot_delay_toil(field)
+                run_pilot_delay_toil(field, CURRENT_DB)
             else:
                 raise RuntimeError("Invalid CWL runner specified.")
         return field
@@ -651,9 +652,9 @@ def pilot_widefield():
             return field
         else:
             if CWL_RUNNER_PILOT_DDCAL == "cwltool":
-                run_pilot_ddcal_cwltool(field)
+                run_pilot_ddcal_cwltool(field, CURRENT_DB)
             elif CWL_RUNNER_PILOT_DDCAL == "toil":
-                run_pilot_ddcal_toil(field)
+                run_pilot_ddcal_toil(field, CURRENT_DB)
             else:
                 raise RuntimeError("Invalid CWL runner specified.")
         return field
