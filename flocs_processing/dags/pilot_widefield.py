@@ -719,7 +719,7 @@ def pilot_widefield():
                     break
             if not is_processing:
                 # Only select a field if nothing is processing it.
-                field = dict(row)
+                field = row
                 break
         if not field:
             raise AirflowSkipException("No unprocessed fields found.")
