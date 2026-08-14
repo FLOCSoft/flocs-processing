@@ -453,20 +453,18 @@ def pilot_widefield():
     @task
     def run_ddf_pipeline(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
         if field["status_ddf"] == PIPELINE_STATUS.processing:
             print(
                 f"ddf-pipeline for {field['target_name']} {field['sas_id_target']} should be running, attempting to resume polling..."
             )
-            with (
-                open(
+            with open(
+                os.path.join(
+                    logsdir,
                     f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}.txt",
-                    "r",
-                ) as f_out,
-                open(
-                    f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                    "r",
-                ) as f_err,
-            ):
+                ),
+                "r",
+            ) as f_out:
                 jobid = None
                 for line in f_out.readlines():
                     if "Submitted batch job" in line:
