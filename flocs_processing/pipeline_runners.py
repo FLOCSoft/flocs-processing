@@ -67,6 +67,8 @@ def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     cmd = f"flocs-run linc calibrator --runner cwltool --scheduler slurm --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
@@ -134,11 +136,11 @@ def run_linc_calibrator_toil(field, calibrator_field: int, db: FlocsDB):
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
-    if not os.path.isdir(outdir):
-        os.mkdir(outdir)
     print(cmd)
     with (
         open(
@@ -180,6 +182,8 @@ def run_linc_target_cwltool(field, db: FlocsDB):
     ms_folder = f"L{field['sas_id_target']}"
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     calibrator_path = get_most_recent_run(
@@ -190,8 +194,6 @@ def run_linc_target_cwltool(field, db: FlocsDB):
     )
     db.set_status_processing(field["target_name"], "target", field["sas_id_target"])
     cmd = f"flocs-run linc target --runner cwltool --scheduler slurm --slurm-cores 64 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
-    if not os.path.isdir(outdir):
-        os.mkdir(outdir)
     print(cmd)
     with (
         open(
@@ -254,6 +256,8 @@ def run_linc_target_toil(field, db: FlocsDB):
     ms_folder = f"L{field['sas_id_target']}"
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     calibrator_path = get_most_recent_run(
@@ -264,8 +268,6 @@ def run_linc_target_toil(field, db: FlocsDB):
     )
     db.set_status_processing(field["target_name"], "target", field["sas_id_target"])
     cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
-    if not os.path.isdir(outdir):
-        os.mkdir(outdir)
     print(cmd)
     with (
         open(
@@ -304,6 +306,8 @@ def run_pilot_delay_cwltool(field, db: FlocsDB):
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
@@ -421,6 +425,8 @@ def run_pilot_delay_toil(field, db: FlocsDB):
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
@@ -547,6 +553,8 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB):
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     if "status_ddf" not in field:
@@ -646,6 +654,8 @@ def run_pilot_ddcal_toil(field, db: FlocsDB):
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     if "status_ddf" not in field:
@@ -764,6 +774,8 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(
@@ -870,6 +882,8 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(
@@ -992,6 +1006,8 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB):
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(
@@ -1096,6 +1112,8 @@ def run_prepare_ddf_subtract(field):
     )
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay")
@@ -1188,6 +1206,8 @@ def run_prepare_ddf(field):
     print(f"Preparing DDF input for {field['target_name']} {field['sas_id_target']}")
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay")
@@ -1280,6 +1300,8 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
     print(f"Running ddf subtract for {field['target_name']} {field['sas_id_target']}")
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(
@@ -1374,6 +1396,8 @@ def launch_ddf_pipeline(field, db: FlocsDB):
     print(f"Starting ddf-pipeline for {field['target_name']} {field['sas_id_target']}")
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
+    if not os.path.isdir(outdir):
+        os.mkdir(outdir)
     if not os.path.isdir(logsdir):
         os.mkdir(logsdir)
     target_path = get_most_recent_run(
