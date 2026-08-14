@@ -360,11 +360,17 @@ def run_pilot_delay_cwltool(field, db: FlocsDB):
     print(cmd)
     with (
         open(
-            f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+            ),
             "w+",
         ) as f_out,
         open(
-            f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            ),
             "w+",
         ) as f_err,
     ):
@@ -468,7 +474,10 @@ def run_pilot_delay_toil(field, db: FlocsDB):
     context = get_current_context()
     if context["ti"].try_number == 1 or (
         not os.path.isfile(
-            f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
+            os.path.join(
+                logsdir,
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+            )
         )
     ):
         cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} --apply-delay-solutions {target_ms_path}"
@@ -497,11 +506,17 @@ def run_pilot_delay_toil(field, db: FlocsDB):
     print(cmd)
     with (
         open(
-            f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+            ),
             "w+",
         ) as f_out,
         open(
-            f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            ),
             "w+",
         ) as f_err,
     ):
@@ -671,7 +686,10 @@ def run_pilot_ddcal_toil(field, db: FlocsDB):
         context = get_current_context()
         if context["ti"].try_number == 1 or (
             not os.path.isfile(
-                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
+                os.path.join(
+                    logsdir,
+                    f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+                )
             )
         ):
             cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --runner toil --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
@@ -707,11 +725,17 @@ def run_pilot_ddcal_toil(field, db: FlocsDB):
     print(cmd)
     with (
         open(
-            f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+            ),
             "w+",
         ) as f_out,
         open(
-            f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            ),
             "w+",
         ) as f_err,
     ):
@@ -764,7 +788,10 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
     context = get_current_context()
     if context["ti"].try_number == 1 or (
         not os.path.isfile(
-            f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt"
+            os.path.join(
+                logsdir,
+                f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt",
+            )
         )
     ):
         cmd = f"flocs-run vlbi image-intermediate-resolution --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --dd-solutions {dd_sols} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
@@ -800,11 +827,17 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
     print(cmd)
     with (
         open(
-            f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt",
+            ),
             "w+",
         ) as f_out,
         open(
-            f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            ),
             "w+",
         ) as f_err,
     ):
@@ -877,7 +910,10 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
     context = get_current_context()
     if context["ti"].try_number == 1 or (
         not os.path.isfile(
-            f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt"
+            os.path.join(
+                logsdir,
+                f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt",
+            )
         )
     ):
         cmd = f"flocs-run vlbi facet-subtract --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --dd-solutions {dd_sols} --model-image-directory {model_images_path} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
@@ -913,11 +949,17 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
     print(cmd)
     with (
         open(
-            f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt",
+            ),
             "w+",
         ) as f_out,
         open(
-            f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            ),
             "w+",
         ) as f_err,
     ):
@@ -972,7 +1014,10 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB):
     context = get_current_context()
     if context["ti"].try_number == 1 or (
         not os.path.isfile(
-            f"log_VLBI_facet-imaging_{field['target_name']}_{field['sas_id_target']}.txt"
+            os.path.join(
+                logsdir,
+                f"log_VLBI_facet-imaging_{field['target_name']}_{field['sas_id_target']}.txt",
+            )
         )
     ):
         cmd = f"flocs-run vlbi facet-imaging --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --resolution 0.3asec --pixel-scale 0.1 --ms-suffix .ms {target_ms_path}"
@@ -1008,11 +1053,17 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB):
     print(cmd)
     with (
         open(
-            f"log_VLBI_facet_imaging_{field['target_name']}_{field['sas_id_target']}.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_facet_imaging_{field['target_name']}_{field['sas_id_target']}.txt",
+            ),
             "w+",
         ) as f_out,
         open(
-            f"log_VLBI_facet_imaging_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_facet_imaging_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            ),
             "w+",
         ) as f_err,
     ):
@@ -1244,7 +1295,10 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
     context = get_current_context()
     if context["ti"].try_number == 1 or (
         not os.path.isfile(
-            f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt"
+            os.path.join(
+                logsdir,
+                f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt",
+            )
         )
     ):
         db.set_status_processing(
@@ -1257,12 +1311,20 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
         print(
             f"Scanning log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
         )
-        with open(
-            os.path.join(
-                logsdir,
-                f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt",
-            )
-        ) as f_out:
+        with (
+            open(
+                os.path.join(
+                    logsdir,
+                    f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt",
+                )
+            ) as f_out,
+            open(
+                os.path.join(
+                    logsdir,
+                    f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                )
+            ) as f_err,
+        ):
             for line in f_out.readlines():
                 print(line)
                 if "Running workflow with" in line:
@@ -1279,11 +1341,17 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
     print(cmd)
     with (
         open(
-            f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt",
+            ),
             "w+",
         ) as f_out,
         open(
-            f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            os.path.join(
+                logsdir,
+                f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}_err.txt",
+            ),
             "w+",
         ) as f_err,
     ):
