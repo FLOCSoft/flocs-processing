@@ -15,6 +15,7 @@ from flocs_processing.pipeline_runners import (
     run_pilot_process_ddf_toil,
     run_prepare_ddf,
     run_prepare_ddf_subtract,
+    launch_ddf_pipeline,
 )
 
 import configparser
