@@ -490,7 +490,12 @@ def pilot_widefield():
                             field["sas_id_target"],
                         )
                         return field
-                    elif (status == "FAILED") or ("TIMEOUT" in status):
+                    elif (
+                        (status == "FAILED")
+                        or ("TIMEOUT" in status)
+                        or ("CANCELELD" in status)
+                        or ("OUT_OF_MEM" in status)
+                    ):
                         raise RuntimeError(
                             f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
                         )
