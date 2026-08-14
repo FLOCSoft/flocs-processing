@@ -11,15 +11,16 @@ from losoto.h5parm import h5parm
 
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
 
-if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
-    raise RuntimeError(
-        "FLOCS_AIRFLOW_CONFIG environment variable not set. Please point this to a valid configuration file."
-    )
-
 # Need to think of a way to centralise this and not read multiple times here and in the DAG
-CONFIG_FILE: str = os.getenv("FLOCS_AIRFLOW_CONFIG") or ""
-if not os.path.isfile(CONFIG_FILE):
-    raise RuntimeError(f"{CONFIG_FILE} is not a valid file")
+if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
+    if not pathlib.Path(os.path.expandvars("$HOME/.flocs_airflow.cfg")).is_file():
+        raise RuntimeError(
+            "FLOCS_AIRFLOW_CONFIG environment variable not set and no $HOME/.flocs_airflow.cfg exists. Please create a valid configuration file."
+        )
+    else:
+        CONFIG_FILE = os.path.expandvars("$HOME/.flocs_airflow.cfg")
+else:
+    CONFIG_FILE = os.getenv("FLOCS_AIRFLOW_CONFIG") or ""
 
 parser = configparser.ConfigParser()
 parser.optionxform = str  # ty: ignore[invalid-assignment]
@@ -30,8 +31,6 @@ print("Config summary:")
 for k, v in parser["DEFAULT"].items():
     print(f"{k}: {v}")
 
-TABLE_NAME = parser["DEFAULT"]["TABLE_NAME"]
-DATABASE = parser["DEFAULT"]["DATABASE"]
 SLURM_ACCOUNT = parser["DEFAULT"]["SLURM_ACCOUNT"]
 SLURM_QUEUE = parser["DEFAULT"]["SLURM_QUEUE"]
 DATA_DIR = parser["DEFAULT"]["DATA_DIR"]
