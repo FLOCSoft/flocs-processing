@@ -512,7 +512,7 @@ def run_pilot_delay_toil(field, db: FlocsDB):
                 "Could not retrieve PILOT workdir. Flocs probably crashed before launching."
             )
         print(f"Resuming failed PILOT run in {flocs_workdir}")
-        cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} {target_ms_path}"
+        cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} {target_ms_path}"
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     print(cmd)
@@ -794,7 +794,7 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
         outdir, field["sas_id_target"], "VLBI_dd-calibration"
     )
     dd_sols = dd_sols_path / "results_VLBI_dd-calibration" / "merged.h5"
-    print(f"Using dd solutions at: {target_path}")
+    print(f"Using dd solutions: {dd_sols}")
 
     if not os.path.isfile(dd_sols):
         raise AirflowFailException(f"{dd_sols} not found.")
@@ -910,13 +910,13 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
     model_images_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_intermediate_resolution_imaging"
     )
-    model_images = (
+    model_images_path = (
         model_images_path
         / "results_VLBI_intermediate_resolution_imaging"
         / "*-????-model-fpb.fits"
     )
     model_images = list(model_images_path.glob("*-????-model-fpb.fits"))
-    print(f"Using model image at: {model_images_path}/*-????-model-fpb.fits")
+    print(f"Using model images at: {model_images_path}")
 
     if not model_images:
         raise AirflowFailException(
@@ -1205,7 +1205,7 @@ def run_prepare_ddf_subtract(field):
         time.sleep(30)
 
     mses_delay_corrected = list(target_ms_path.glob("*.dp3concat"))
-    return mses_delay_corrected
+    return field
 
 
 def run_prepare_ddf(field):
@@ -1301,7 +1301,7 @@ def run_prepare_ddf(field):
         time.sleep(30)
 
     mses_averaged = list(target_ms_path.glob("*_pre-cal.ms"))
-    return mses_averaged
+    return field
 
 
 def run_pilot_process_ddf_toil(field, db: FlocsDB):
