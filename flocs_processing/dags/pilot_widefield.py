@@ -471,8 +471,9 @@ def pilot_widefield():
                 for line in f_out.readlines():
                     if "Submitted batch job" in line:
                         jobid = line.strip().split()[-1]
-                    else:
-                        raise AirflowFailException("Failed to recover job id from log.")
+                        break
+                else:
+                    raise AirflowFailException("Failed to recover job id from log.")
 
                 while True:
                     print(f"Polling DDF-pipeine job {jobid}")
@@ -485,7 +486,7 @@ def pilot_widefield():
                     elif status == "COMPLETED":
                         CURRENT_DB.set_status_finished(
                             field["target_name"],
-                            "vlbi_ddf_subtract",
+                            "ddf",
                             field["sas_id_target"],
                         )
                         return field
