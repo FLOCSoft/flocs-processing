@@ -39,7 +39,9 @@ PROCESSING_DIR = parser["DEFAULT"]["PROCESSING_DIR"]
 NN_MODEL_CACHE = parser["DEFAULT"]["NN_MODEL_CACHE"]
 DDF_CONFIG = parser["DEFAULT"]["DDF_CONFIG"]
 FLUX_CALIBRATOR_TEMPLATE = parser["DEFAULT"]["FLUX_CALIBRATOR_TEMPLATE"]
-NEEDS_MANUAL_APPROVAL_DELAY = parser.getboolean("DEFAULT", "NEEDS_MANUAL_APPROVAL_DELAY")
+NEEDS_MANUAL_APPROVAL_DELAY = parser.getboolean(
+    "DEFAULT", "NEEDS_MANUAL_APPROVAL_DELAY"
+)
 
 
 def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.Path:
@@ -53,8 +55,12 @@ def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.
         ]
     else:
         rundirs_sorted_filtered = [d for d in rundirs_sorted if sas_id in d.parts[-1]]
-    rundir_final = rundirs_sorted_filtered[-1].absolute()
-    return rundir_final
+    try:
+        rundir_final = rundirs_sorted_filtered[-1].absolute()
+        return rundir_final
+    except IndexError:
+        print("No {pipeline} run for {sas_id} found")
+        raise RuntimeError("No {pipeline} run for {sas_id} found")
 
 
 def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
@@ -1281,7 +1287,9 @@ def run_prepare_ddf(field):
             ).stdout.strip()
             if status == "COMPLETED":
                 print(f"Job {jobid} completed ({out_ms.name})")
-            elif status == "FAILED":
+            elif (
+                (status == "FAILED") or ("TIMEOUT" in status) or ("CANCELLED" in status)
+            ):
                 raise RuntimeError(
                     f"DP3 averaging job {jobid} failed for {out_ms.name}"
                 )
@@ -1389,6 +1397,9 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
                 field["target_name"], "ddf_subtract", field["sas_id_target"]
             )
         else:
+            db.set_status_failed(
+                field["target_name"], "ddf_subtract", field["sas_id_target"]
+            )
             raise RuntimeError
 
 

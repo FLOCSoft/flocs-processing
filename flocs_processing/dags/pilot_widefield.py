@@ -65,7 +65,9 @@ PROCESSING_DIR = parser["DEFAULT"]["PROCESSING_DIR"]
 NN_MODEL_CACHE = parser["DEFAULT"]["NN_MODEL_CACHE"]
 DDF_CONFIG = parser["DEFAULT"]["DDF_CONFIG"]
 FLUX_CALIBRATOR_TEMPLATE = parser["DEFAULT"]["FLUX_CALIBRATOR_TEMPLATE"]
-NEEDS_MANUAL_APPROVAL_DELAY = parser.getboolean("DEFAULT", "NEEDS_MANUAL_APPROVAL_DELAY")
+NEEDS_MANUAL_APPROVAL_DELAY = parser.getboolean(
+    "DEFAULT", "NEEDS_MANUAL_APPROVAL_DELAY"
+)
 
 CWL_RUNNER_LINC_CALIBRATOR = "cwltool"
 CWL_RUNNER_LINC_TARGET = "toil"
@@ -482,7 +484,9 @@ def pilot_widefield():
                         time.sleep(60)
                     elif status == "COMPLETED":
                         CURRENT_DB.set_status_finished(
-                            field["target_name"], "ddf_subtract", field["sas_id_target"]
+                            field["target_name"],
+                            "vlbi_ddf_subtract",
+                            field["sas_id_target"],
                         )
                         return field
                     elif (status == "FAILED") or ("TIMEOUT" in status):
