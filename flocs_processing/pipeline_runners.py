@@ -913,12 +913,10 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
     model_images_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_intermediate_resolution_imaging"
     )
-    model_images = (
-        model_images_path
-        / "results_VLBI_intermediate_resolution_imaging"
-        / "*-????-model-fpb.fits"
+    model_images_path = (
+        model_images_path / "results_VLBI_intermediate_resolution_imaging"
     )
-    model_images = list(model_images.glob("*-????-model-fpb.fits"))
+    model_images = list(model_images_path.glob("*-????-model-fpb.fits"))
     print(f"Using model images at: {model_images_path}")
 
     if not model_images:
