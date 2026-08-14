@@ -68,9 +68,9 @@ def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     cmd = f"flocs-run linc calibrator --runner cwltool --scheduler slurm --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
     with (
         open(
@@ -137,9 +137,9 @@ def run_linc_calibrator_toil(field, calibrator_field: int, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
     print(cmd)
     with (
@@ -183,9 +183,9 @@ def run_linc_target_cwltool(field, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     calibrator_path = get_most_recent_run(
         outdir, field["sas_id_calibrator_final"], "LINC_calibrator"
     )
@@ -257,9 +257,9 @@ def run_linc_target_toil(field, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     calibrator_path = get_most_recent_run(
         outdir, field["sas_id_calibrator_final"], "LINC_calibrator"
     )
@@ -307,9 +307,9 @@ def run_pilot_delay_cwltool(field, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
     target_ms_path = target_path / "results_LINC_target" / "results"
     db.set_status_processing(field["target_name"], "vlbi_delay", field["sas_id_target"])
@@ -360,7 +360,7 @@ def run_pilot_delay_cwltool(field, db: FlocsDB):
 
     cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --runner cwltool --scheduler slurm --slurm-cores 64 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} --apply-delay-solutions {target_ms_path}"
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     print(cmd)
     with (
         open(
@@ -426,9 +426,9 @@ def run_pilot_delay_toil(field, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
     target_ms_path = target_path / "results_LINC_target" / "results"
     db.set_status_processing(field["target_name"], "vlbi_delay", field["sas_id_target"])
@@ -508,7 +508,7 @@ def run_pilot_delay_toil(field, db: FlocsDB):
         print(f"Resuming failed PILOT run in {flocs_workdir}")
         cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} {target_ms_path}"
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     print(cmd)
     with (
         open(
@@ -554,9 +554,9 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     if "status_ddf" not in field:
         print("Not a widefield imaging run, checking LINC + delay calibration.")
         target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
@@ -594,7 +594,7 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB):
 
         cmd = f"flocs-run vlbi dd-calibration --runner cwltool --scheduler slurm --slurm-cores 64 --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     print(cmd)
     with (
         open(
@@ -655,9 +655,9 @@ def run_pilot_ddcal_toil(field, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     if "status_ddf" not in field:
         print("Not a widefield imaging run, checking LINC + delay calibration.")
         target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
@@ -731,7 +731,7 @@ def run_pilot_ddcal_toil(field, db: FlocsDB):
                 print(f"Resuming failed PILOT run in {flocs_workdir}")
                 cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --runner toil --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     print(cmd)
     with (
         open(
@@ -775,9 +775,9 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_process-ddf"
     )
@@ -835,7 +835,7 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
             print(f"Resuming failed PILOT run in {flocs_workdir}")
             cmd = f"flocs-run vlbi image-intermediate-resolution --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --dd-solutions {dd_sols} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     print(cmd)
     with (
         open(
@@ -883,9 +883,9 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_process-ddf"
     )
@@ -959,7 +959,7 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
             print(f"Resuming failed PILOT run in {flocs_workdir}")
             cmd = f"flocs-run vlbi facet-subtract --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --dd-solutions {dd_sols} --model-image-directory {model_images_path} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     print(cmd)
     with (
         open(
@@ -1007,9 +1007,9 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_facet_subtract"
     )
@@ -1065,7 +1065,7 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB):
             print(f"Resuming failed PILOT run in {flocs_workdir}")
             cmd = f"flocs-run vlbi facet-imaging --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --resolution 0.3asec --pixel-scale 0.1 --ms-suffix .ms {target_ms_path}"
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     print(cmd)
     with (
         open(
@@ -1113,9 +1113,9 @@ def run_prepare_ddf_subtract(field):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay")
     target_ms_path = target_path / "results_VLBI_delay-calibration"
     mses_unaveraged = list(target_ms_path.glob("*.dp3concat"))
@@ -1207,9 +1207,9 @@ def run_prepare_ddf(field):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay")
     target_ms_path = target_path / "results_VLBI_delay-calibration"
     mses_unaveraged = list(target_ms_path.glob("*.dp3concat"))
@@ -1301,9 +1301,9 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_delay-calibration"
     )
@@ -1359,7 +1359,7 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
         print(f"Resuming failed PILOT run in {flocs_workdir}")
         cmd = f"flocs-run vlbi process-ddf --runner toil --record-toil-stats --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix .dp3concat --ddf-rundir {ddf_path} --solsdir {ddf_sols_path} --do-subtraction {target_ms_path}"
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     print(cmd)
     with (
         open(
@@ -1397,9 +1397,9 @@ def launch_ddf_pipeline(field, db: FlocsDB):
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
     if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
-        os.mkdir(logsdir)
+        os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_delay-calibration"
     )
