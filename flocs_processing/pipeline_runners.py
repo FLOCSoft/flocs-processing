@@ -60,7 +60,7 @@ def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.
         return rundir_final
     except IndexError:
         print(f"No {pipeline} run for {sas_id} found")
-        raise RuntimeError("No {pipeline} run for {sas_id} found")
+        raise RuntimeError(f"No {pipeline} run for {sas_id} found")
 
 
 def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
