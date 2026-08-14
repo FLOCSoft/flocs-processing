@@ -59,7 +59,7 @@ def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.
         rundir_final = rundirs_sorted_filtered[-1].absolute()
         return rundir_final
     except IndexError:
-        print("No {pipeline} run for {sas_id} found")
+        print(f"No {pipeline} run for {sas_id} found")
         raise RuntimeError("No {pipeline} run for {sas_id} found")
 
 
@@ -500,7 +500,10 @@ def run_pilot_delay_toil(field, db: FlocsDB):
             f"Scanning log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
         )
         with open(
-            f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
+            os.path.join(
+                logsdir,
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
+            )
         ) as f_out:
             for line in f_out.readlines():
                 print(line)
@@ -902,7 +905,7 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
         outdir, field["sas_id_target"], "VLBI_dd-calibration"
     )
     dd_sols = dd_sols_path / "results_VLBI_dd-calibration" / "merged.h5"
-    print(f"Using dd solutions at: {target_path}")
+    print(f"Using dd solutions at: {dd_sols}")
 
     if not os.path.isfile(dd_sols):
         raise AirflowFailException(f"{dd_sols} not found.")
@@ -910,12 +913,12 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
     model_images_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_intermediate_resolution_imaging"
     )
-    model_images_path = (
+    model_images = (
         model_images_path
         / "results_VLBI_intermediate_resolution_imaging"
         / "*-????-model-fpb.fits"
     )
-    model_images = list(model_images_path.glob("*-????-model-fpb.fits"))
+    model_images = list(model_images.glob("*-????-model-fpb.fits"))
     print(f"Using model images at: {model_images_path}")
 
     if not model_images:
@@ -1148,7 +1151,7 @@ def run_prepare_ddf_subtract(field):
         )
     if mses_unaveraged_pilot and (len(mses_unaveraged_pilot) == len(mses_unaveraged)):
         print("Appropriate input exists for ddf-pipeline.")
-        return field
+        return mses_unaveraged_pilot
 
     jobids = []
     delay_corrected_mses = []
@@ -1205,7 +1208,7 @@ def run_prepare_ddf_subtract(field):
         time.sleep(30)
 
     mses_delay_corrected = list(target_ms_path.glob("*.dp3concat"))
-    return field
+    return mses_delay_corrected
 
 
 def run_prepare_ddf(field):
@@ -1244,7 +1247,7 @@ def run_prepare_ddf(field):
         )
     if mses_unaveraged and (len(mses_averaged) == len(mses_unaveraged)):
         print("Appropriate input exists for ddf-pipeline.")
-        return field
+        return mses_averaged
 
     jobids = []
     averaged_mses = []
@@ -1301,7 +1304,7 @@ def run_prepare_ddf(field):
         time.sleep(30)
 
     mses_averaged = list(target_ms_path.glob("*_pre-cal.ms"))
-    return field
+    return mses_averaged
 
 
 def run_pilot_process_ddf_toil(field, db: FlocsDB):
@@ -1332,7 +1335,7 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
         )
     ):
         db.set_status_processing(
-            field["target_name"], "ddf_subtract", field["sas_id_target"]
+            field["target_name"], "vlbi_ddf_subtract", field["sas_id_target"]
         )
         cmd = f"flocs-run vlbi process-ddf --runner toil --record-toil-stats --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix .dp3concat --ddf-rundir {ddf_path} --solsdir {ddf_sols_path} --do-subtraction {target_ms_path}"
     else:
@@ -1394,11 +1397,11 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
                 success = True
         if success:
             db.set_status_finished(
-                field["target_name"], "ddf_subtract", field["sas_id_target"]
+                field["target_name"], "vlbi_ddf_subtract", field["sas_id_target"]
             )
         else:
             db.set_status_failed(
-                field["target_name"], "ddf_subtract", field["sas_id_target"]
+                field["target_name"], "vlbi_ddf_subtract", field["sas_id_target"]
             )
             raise RuntimeError
 
@@ -1462,7 +1465,7 @@ def launch_ddf_pipeline(field, db: FlocsDB):
                 elif status == "COMPLETED":
                     db.set_status_finished(
                         field["target_name"],
-                        "ddf_subtract",
+                        "ddf",
                         field["sas_id_target"],
                     )
                     break
