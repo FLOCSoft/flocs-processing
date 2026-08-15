@@ -826,12 +826,20 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
             print(
                 f"Scanning log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
             )
-            with open(
-                os.path.join(
-                    logsdir,
-                    f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt",
-                )
-            ) as f_out:
+            with (
+                open(
+                    os.path.join(
+                        logsdir,
+                        f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt",
+                    )
+                ) as f_out,
+                open(
+                    os.path.join(
+                        logsdir,
+                        f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}_err.txt",
+                    )
+                ) as f_err,
+            ):
                 for line in f_out.readlines():
                     print(line)
                     if "Running workflow with" in line:
