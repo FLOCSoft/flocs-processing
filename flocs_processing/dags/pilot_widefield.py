@@ -565,12 +565,48 @@ def pilot_widefield():
         return field
 
     @task
-    def run_vlbi_facet_imaging(field):
+    def run_vlbi_facet_imaging_6p0(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished:
             return field
         else:
-            run_pilot_facet_imaging_toil(field, CURRENT_DB)
+            run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=6.0)
+        return field
+
+    @task
+    def run_vlbi_facet_imaging_3p0(field):
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished:
+            return field
+        else:
+            run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=3.0)
+        return field
+
+    @task
+    def run_vlbi_facet_imaging_1p5(field):
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished:
+            return field
+        else:
+            run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=1.5)
+        return field
+
+    @task
+    def run_vlbi_facet_imaging_0p6(field):
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished:
+            return field
+        else:
+            run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=0.6)
+        return field
+
+    @task
+    def run_vlbi_facet_imaging_0p3(field):
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished:
+            return field
+        else:
+            run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=0.3)
         return field
 
     proceed = check_fields()

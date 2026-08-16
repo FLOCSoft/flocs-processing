@@ -1015,7 +1015,7 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
             raise RuntimeError
 
 
-def run_pilot_facet_imaging_toil(field, db: FlocsDB):
+def run_pilot_facet_imaging_toil(field, db: FlocsDB, resolution: float = 6.0):
     print(
         f"Processing ILT facet imaging for {field['target_name']} {field['sas_id_target']}"
     )
@@ -1042,6 +1042,7 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB):
         field["target_name"], "vlbi_facet_imaging", field["sas_id_target"]
     )
 
+    pixel_scale = resolution / 4
     context = get_current_context()
     if context["ti"].try_number == 1 or (
         not os.path.isfile(
@@ -1051,11 +1052,11 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB):
             )
         )
     ):
-        cmd = f"flocs-run vlbi facet-imaging --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --resolution 0.3asec --pixel-scale 0.1 --ms-suffix .ms {target_ms_path}"
+        cmd = f"flocs-run vlbi facet-imaging --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --resolution {resolution}asec --pixel-scale {pixel_scale} --ms-suffix .ms {target_ms_path}"
     else:
         if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.downloaded:
             # This way we can force a clean restart in the database.
-            cmd = f"flocs-run vlbi facet-imaging --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --resolution 0.3asec --pixel-scale 0.1 --ms-suffix .ms {target_ms_path}"
+            cmd = f"flocs-run vlbi facet-imaging --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --resolution {resolution}asec --pixel-scale {pixel_scale} --ms-suffix .ms {target_ms_path}"
         else:
             # Extract the previous working directory
             flocs_workdir = ""
@@ -1078,7 +1079,7 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB):
                     "Could not retrieve PILOT workdir. Flocs probably crashed before launching."
                 )
             print(f"Resuming failed PILOT run in {flocs_workdir}")
-            cmd = f"flocs-run vlbi facet-imaging --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --resolution 0.3asec --pixel-scale 0.1 --ms-suffix .ms {target_ms_path}"
+            cmd = f"flocs-run vlbi facet-imaging --record-toil-stats --runner toil --scheduler slurm --slurm-time 72:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --resolution {resolution}asec --pixel-scale {pixel_scale} --ms-suffix .ms {target_ms_path}"
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     print(cmd)
