@@ -1122,7 +1122,7 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB, resolution: float = 6.0):
             raise RuntimeError
 
 
-def run_prepare_ddf_subtract(field):
+def run_prepare_ddf_subtract(field, db: FlocsDB):
     print(
         f"Preparing input for DDF subtract of {field['target_name']} {field['sas_id_target']}"
     )
@@ -1137,6 +1137,11 @@ def run_prepare_ddf_subtract(field):
     mses_unaveraged = list(target_ms_path.glob("*.dp3concat"))
     delay_sols = ""
     if not mses_unaveraged:
+        db.set_status_processing(
+            field["target_name"],
+            "vlbi_ddf_subtract",
+            field["sas_id_target"],
+        )
         print(
             "No MSes found in delay-calibration output, will apply delay solutions to LINC."
         )
@@ -1153,6 +1158,11 @@ def run_prepare_ddf_subtract(field):
         mses_unaveraged = list(linc_ms_path.glob("*.dp3concat"))
     mses_unaveraged_pilot = list(target_ms_path.glob("*.dp3concat"))
     if not mses_unaveraged:
+        db.set_status_failed(
+            field["target_name"],
+            "vlbi_ddf_subtract",
+            field["sas_id_target"],
+        )
         raise RuntimeError(
             f"No unaveraged input MSes found at {linc_ms_path}/*.dp3concat"
         )
@@ -1218,7 +1228,7 @@ def run_prepare_ddf_subtract(field):
     return mses_delay_corrected
 
 
-def run_prepare_ddf(field):
+def run_prepare_ddf(field, db: FlocsDB):
     print(f"Preparing DDF input for {field['target_name']} {field['sas_id_target']}")
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
@@ -1231,6 +1241,11 @@ def run_prepare_ddf(field):
     mses_unaveraged = list(target_ms_path.glob("*.dp3concat"))
     delay_sols = ""
     if not mses_unaveraged:
+        db.set_status_processing(
+            field["target_name"],
+            "ddf",
+            field["sas_id_target"],
+        )
         print(
             "No MSes found in delay-calibration output, will apply delay solutions to LINC."
         )
@@ -1249,6 +1264,11 @@ def run_prepare_ddf(field):
         print("Found unaveraged data in delay calibration output.")
     mses_averaged = list(target_ms_path.glob("*_pre-cal.ms"))
     if not mses_unaveraged:
+        db.set_status_failed(
+            field["target_name"],
+            "ddf",
+            field["sas_id_target"],
+        )
         raise RuntimeError(
             f"No unaveraged input MSes found at {linc_ms_path}/*.dp3concat"
         )
