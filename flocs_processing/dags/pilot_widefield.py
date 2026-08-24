@@ -92,7 +92,7 @@ def get_approval(field, identifier, needs_approval):
         return field
 
 
-@dag(max_active_runs=1)
+@dag(max_active_runs=4)
 def pilot_widefield():
     @task
     def get_unprocessed_target():
@@ -532,7 +532,7 @@ def pilot_widefield():
 
     @task
     def prepare_ddf(field):
-        mses_averaged = run_prepare_ddf(field)
+        mses_averaged = run_prepare_ddf(field, CURRENT_DB)
         if mses_averaged:
             return field
         else:
@@ -540,7 +540,7 @@ def pilot_widefield():
 
     @task
     def prepare_ddf_subtract(field):
-        mses_delay_corrected = run_prepare_ddf_subtract(field)
+        mses_delay_corrected = run_prepare_ddf_subtract(field, CURRENT_DB)
         if mses_delay_corrected:
             return field
         else:
@@ -635,7 +635,11 @@ def pilot_widefield():
     result_vlbi_dd = run_vlbi_ddcal(result_ddf_subtract)
     result_vlbi_interm_img = run_vlbi_image_intermediate(result_vlbi_dd)
     result_vlbi_facet_subtract = run_vlbi_facet_subtract(result_vlbi_interm_img)
-    _result_vlbi_facet_img = run_vlbi_facet_imaging(result_vlbi_facet_subtract)
+    _result_vlbi_facet_img_6p0 = run_vlbi_facet_imaging_6p0(result_vlbi_facet_subtract)
+    _result_vlbi_facet_img_3p0 = run_vlbi_facet_imaging_3p0(result_vlbi_facet_subtract)
+    _result_vlbi_facet_img_1p5 = run_vlbi_facet_imaging_1p5(result_vlbi_facet_subtract)
+    _result_vlbi_facet_img_0p6 = run_vlbi_facet_imaging_0p6(result_vlbi_facet_subtract)
+    _result_vlbi_facet_img_0p3 = run_vlbi_facet_imaging_0p3(result_vlbi_facet_subtract)
 
     (
         await_approval_delay
