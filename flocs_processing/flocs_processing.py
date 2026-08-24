@@ -25,7 +25,7 @@ PIPELINES = Literal[
     "vlbi_dd",
     "vlbi_intermediate_img",
     "vlbi_facet_subtract",
-    "vlbi_facet_img",
+    "vlbi_facet_imaging",
 ]
 
 
