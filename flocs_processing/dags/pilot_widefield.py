@@ -332,9 +332,21 @@ def pilot_widefield():
 
     @task(trigger_rule=TriggerRule.ALL_DONE)
     def select_best_calibrator(result1, result2):
-        if result1["sas_id_calibrator_final"]:
+        if result1 and (not result2):
+            print("Only cal 1 succeeded, continuing with that")
+            CURRENT_DB.set_final_calibrator(
+                result1["target_name"],
+                result1["sas_id_target"],
+                result1["sas_id_calibrator1"],
+            )
             return result1
-        elif result2["sas_id_calibrator_final"]:
+        elif (not result1) and result2:
+            print("Only cal 2 succeeded, continuing with that")
+            CURRENT_DB.set_final_calibrator(
+                result2["target_name"],
+                result2["sas_id_target"],
+                result2["sas_id_calibrator2"],
+            )
             return result2
         elif result1 and result2:
             cal_template = pathlib.Path(FLUX_CALIBRATOR_TEMPLATE)
@@ -401,22 +413,6 @@ def pilot_widefield():
                             result2["sas_id_calibrator2"],
                         )
                         return result2
-        elif result1 and (not result2):
-            print("Only cal 1 succeeded, continuing with that")
-            CURRENT_DB.set_final_calibrator(
-                result1["target_name"],
-                result1["sas_id_target"],
-                result1["sas_id_calibrator1"],
-            )
-            return result1
-        elif (not result1) and result2:
-            print("Only cal 2 succeeded, continuing with that")
-            CURRENT_DB.set_final_calibrator(
-                result2["target_name"],
-                result2["sas_id_target"],
-                result2["sas_id_calibrator2"],
-            )
-            return result2
         else:
             raise AirflowFailException("No calibrators succeeded; stopping processing.")
 
