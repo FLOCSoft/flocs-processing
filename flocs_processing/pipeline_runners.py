@@ -364,7 +364,7 @@ def run_pilot_delay_cwltool(field, db: FlocsDB):
         print(f"Excluding the following bad nodes from scheduling: {bad_nodes}")
         os.environ["TOIL_SLURM_ARGS"] = f"--exclude={bad_nodes}"
 
-    cmd = f"flocs-run vlbi delay-calibration --record-toil-stats --runner cwltool --scheduler slurm --slurm-cores 64 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} --apply-delay-solutions {target_ms_path}"
+    cmd = f"flocs-run vlbi delay-calibration --runner cwltool --scheduler slurm --slurm-cores 64 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} --apply-delay-solutions {target_ms_path}"
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     print(cmd)
