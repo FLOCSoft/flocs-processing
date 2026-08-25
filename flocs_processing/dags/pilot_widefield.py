@@ -297,7 +297,7 @@ def pilot_widefield():
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if not field["sas_id_calibrator1"]:
             raise AirflowSkipException("Calibrator 1 does not exist, skipping.")
-        if field["status_calibrator1"] == PIPELINE_STATUS.finished:
+        if field["status_calibrator1"] == PIPELINE_STATUS.finished.value:
             print(
                 f"Flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']} already processed."
             )
@@ -316,7 +316,7 @@ def pilot_widefield():
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if not field["sas_id_calibrator2"]:
             raise AirflowSkipException("Calibrator 2 does not exist, skipping.")
-        if field["status_calibrator2"] == PIPELINE_STATUS.finished:
+        if field["status_calibrator2"] == PIPELINE_STATUS.finished.value:
             print(
                 f"Flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']} already processed."
             )
@@ -418,8 +418,8 @@ def pilot_widefield():
 
     @task
     def run_linc_target(field):
-        if (field["status_target"] == PIPELINE_STATUS.finished) or (
-            field["status_target"] == PIPELINE_STATUS.processing
+        if (field["status_target"] == PIPELINE_STATUS.finished.value) or (
+            field["status_target"] == PIPELINE_STATUS.processing.value
         ):
             return field
         else:
@@ -437,7 +437,7 @@ def pilot_widefield():
 
     @task(retries=0, retry_delay=datetime.timedelta(seconds=5))
     def run_vlbi_delay(field):
-        if field["status_vlbi_delay"] == PIPELINE_STATUS.finished:
+        if field["status_vlbi_delay"] == PIPELINE_STATUS.finished.value:
             return field
         else:
             if CWL_RUNNER_PILOT_DELAY == "cwltool":
@@ -452,7 +452,7 @@ def pilot_widefield():
     def run_ddf_pipeline(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
-        if field["status_ddf"] == PIPELINE_STATUS.processing:
+        if field["status_ddf"] == PIPELINE_STATUS.processing.value:
             print(
                 f"ddf-pipeline for {field['target_name']} {field['sas_id_target']} should be running, attempting to resume polling..."
             )
@@ -495,7 +495,7 @@ def pilot_widefield():
                         raise RuntimeError(
                             f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
                         )
-        if field["status_ddf"] == PIPELINE_STATUS.finished:
+        if field["status_ddf"] == PIPELINE_STATUS.finished.value:
             return field
         else:
             launch_ddf_pipeline(field, CURRENT_DB)
@@ -504,7 +504,7 @@ def pilot_widefield():
     @task
     def run_ddf_subtract(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_ddf_subtract"] == PIPELINE_STATUS.finished:
+        if field["status_vlbi_ddf_subtract"] == PIPELINE_STATUS.finished.value:
             return field
         else:
             run_pilot_process_ddf_toil(field, CURRENT_DB)
@@ -513,8 +513,8 @@ def pilot_widefield():
     @task
     def run_vlbi_ddcal(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if (field["status_vlbi_dd"] == PIPELINE_STATUS.finished) or (
-            field["status_vlbi_dd"] == PIPELINE_STATUS.processing
+        if (field["status_vlbi_dd"] == PIPELINE_STATUS.finished.value) or (
+            field["status_vlbi_dd"] == PIPELINE_STATUS.processing.value
         ):
             return field
         else:
@@ -545,7 +545,7 @@ def pilot_widefield():
     @task
     def run_vlbi_image_intermediate(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_intermediate_img"] == PIPELINE_STATUS.finished:
+        if field["status_vlbi_intermediate_img"] == PIPELINE_STATUS.finished.value:
             return field
         else:
             run_pilot_intermediate_image_toil(field, CURRENT_DB)
@@ -554,7 +554,7 @@ def pilot_widefield():
     @task
     def run_vlbi_facet_subtract(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_facet_subtract"] == PIPELINE_STATUS.finished:
+        if field["status_vlbi_facet_subtract"] == PIPELINE_STATUS.finished.value:
             return field
         else:
             run_pilot_facet_subtract_toil(field, CURRENT_DB)
@@ -563,7 +563,7 @@ def pilot_widefield():
     @task
     def run_vlbi_facet_imaging_6p0(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished:
+        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished.value:
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=6.0)
@@ -572,7 +572,7 @@ def pilot_widefield():
     @task
     def run_vlbi_facet_imaging_3p0(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished:
+        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished.value:
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=3.0)
@@ -581,7 +581,7 @@ def pilot_widefield():
     @task
     def run_vlbi_facet_imaging_1p5(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished:
+        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished.value:
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=1.5)
@@ -590,7 +590,7 @@ def pilot_widefield():
     @task
     def run_vlbi_facet_imaging_0p6(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished:
+        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished.value:
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=0.6)
@@ -599,7 +599,7 @@ def pilot_widefield():
     @task
     def run_vlbi_facet_imaging_0p3(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished:
+        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished.value:
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=0.3)
