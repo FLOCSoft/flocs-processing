@@ -34,7 +34,7 @@ from airflow.providers.standard.sensors.python import PythonSensor
 from airflow.sdk.exceptions import AirflowSkipException
 from airflow.task.trigger_rule import TriggerRule
 from flocs_lta.lta_search import ObservationStager
-from ilotss.assess_calibrators import assess_and_compare
+from autoPILOT.ilotss.assess_calibrators import assess_and_compare
 from stager_access import get_surls_requested, get_surls_online
 
 if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
