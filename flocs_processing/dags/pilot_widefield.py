@@ -327,7 +327,7 @@ def pilot_widefield():
                             reschedule(stage_id_target)
                             schedule_tries_tar += 1
                             continue
-                    if len(get_surls_online(stage_id_target)) == int(
+                    if len(get_surls_online(stage_id_target)) >= int(
                         ACCEPTED_ONLINE_FRACTION
                         * len(get_surls_requested(stage_id_target))
                     ):
