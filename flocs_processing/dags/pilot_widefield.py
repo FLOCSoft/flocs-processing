@@ -23,19 +23,18 @@ import datetime
 import os
 import pathlib
 import random
-import re
 import sqlite3
 import subprocess
 import time
 
 from airflow.exceptions import AirflowFailException
-from airflow.sdk import dag, get_current_context, task
+from airflow.sdk import dag, task
 from airflow.providers.standard.sensors.python import PythonSensor
 from airflow.sdk.exceptions import AirflowSkipException
 from airflow.task.trigger_rule import TriggerRule
 from flocs_lta.lta_search import ObservationStager
 from autoPILOT.ilotss.assess_calibrators import assess_and_compare
-from stager_access import get_surls_requested, get_surls_online
+from stager_access import get_surls_requested, get_surls_online, reschedule, get_status
 
 if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
     raise RuntimeError(
@@ -121,6 +120,9 @@ def pilot_widefield():
 
     @task
     def download_field(field):
+        ACCEPTED_ONLINE_FRACTION = 0.95
+        MAX_RESCHEDULES_CALIBRATOR = 3
+        MAX_RESCHEDULES_TARGET = 3
         if field["downloaded"]:
             return field
         else:
@@ -230,10 +232,18 @@ def pilot_widefield():
             target_staged = False
             calibrator_downloaded = not stage_calibrators
             target_downloaded = not stage_target
+            schedule_tries_cal = 0
+            schedule_tries_tar = 0
             while True:
                 if not calibrator_downloaded:
-                    if len(get_surls_online(stage_id_calibrators)) == len(
-                        get_surls_requested(stage_id_calibrators)
+                    if get_status(stage_id_calibrators) == "I":
+                        if schedule_tries_cal < MAX_RESCHEDULES_CALIBRATOR:
+                            reschedule(stage_id_calibrators)
+                            schedule_tries_cal += 1
+                            continue
+                    if len(get_surls_online(stage_id_calibrators)) >= int(
+                        ACCEPTED_ONLINE_FRACTION
+                        * len(get_surls_requested(stage_id_calibrators))
                     ):
                         calibrator_staged = True
                     if calibrator_staged and not calibrator_downloaded:
@@ -260,8 +270,14 @@ def pilot_widefield():
                                 raise RuntimeError
 
                 if not target_downloaded:
-                    if len(get_surls_online(stage_id_target)) == len(
-                        get_surls_requested(stage_id_target)
+                    if get_status(stage_id_target) == "I":
+                        if schedule_tries_tar < MAX_RESCHEDULES_TARGET:
+                            reschedule(stage_id_target)
+                            schedule_tries_tar += 1
+                            continue
+                    if len(get_surls_online(stage_id_target)) == int(
+                        ACCEPTED_ONLINE_FRACTION
+                        * len(get_surls_requested(stage_id_target))
                     ):
                         target_staged = True
                     if target_staged and not target_downloaded:
