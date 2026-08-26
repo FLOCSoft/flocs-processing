@@ -77,7 +77,7 @@ CWL_RUNNER_PILOT_DDCAL = "toil"
 CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
 
 
-class STAGING_STATUS(Enum):
+class STAGING_PROGRESS(Enum):
     success = "C"
     partial_success = "I"
     failed = "E"
@@ -91,6 +91,19 @@ class STAGING_STATUS(Enum):
         else:
             raise NotImplementedError
 
+class STAGING_STATUS(Enum):
+    success = "success"
+    partial_success = "partial success"
+    failed = "failed"
+    aborted = "aborted"
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return self.value == other
+        elif other.__class__ is self.__class__:
+            return self.value == other.value
+        else:
+            raise NotImplementedError
 
 def get_approval(field, identifier, needs_approval):
     if not needs_approval:
