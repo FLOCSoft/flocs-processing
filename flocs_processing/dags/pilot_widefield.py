@@ -84,7 +84,7 @@ class STAGING_STATUS(Enum):
     aborted = "A"
 
     def __eq__(self, other):
-        if other.__class__ is str:
+        if isinstance(other, str):
             return self.value == other
         elif other.__class__ is self.__class__:
             return self.value == other.value
