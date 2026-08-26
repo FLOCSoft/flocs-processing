@@ -1,3 +1,4 @@
+from enum import Enum
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
 from flocs_processing.pipeline_runners import (
     get_most_recent_run,
@@ -74,6 +75,21 @@ CWL_RUNNER_PILOT_DELAY = "toil"
 CWL_RUNNER_PILOT_DDCAL = "toil"
 
 CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
+
+
+class STAGING_STATUS(Enum):
+    success = "C"
+    partial_success = "I"
+    failed = "E"
+    aborted = "A"
+
+    def __eq__(self, other):
+        if other.__class__ is str:
+            return self.value == other
+        elif other.__class__ is self.__class__:
+            return self.value == other.value
+        else:
+            raise NotImplementedError
 
 
 def get_approval(field, identifier, needs_approval):
@@ -236,7 +252,10 @@ def pilot_widefield():
             schedule_tries_tar = 0
             while True:
                 if not calibrator_downloaded:
-                    if get_status(stage_id_calibrators) == "I":
+                    if (
+                        get_status(stage_id_calibrators)
+                        == STAGING_STATUS.partial_success
+                    ):
                         if schedule_tries_cal < MAX_RESCHEDULES_CALIBRATOR:
                             reschedule(stage_id_calibrators)
                             schedule_tries_cal += 1
@@ -270,7 +289,7 @@ def pilot_widefield():
                                 raise RuntimeError
 
                 if not target_downloaded:
-                    if get_status(stage_id_target) == "I":
+                    if get_status(stage_id_target) == STAGING_STATUS.partial_success:
                         if schedule_tries_tar < MAX_RESCHEDULES_TARGET:
                             reschedule(stage_id_target)
                             schedule_tries_tar += 1
