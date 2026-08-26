@@ -172,7 +172,7 @@ def pilot_widefield():
 
             ms_folder = f"L{field['sas_id_target']}"
             calibrator_full_path = os.path.join(
-                DATA_DIR, field["calibrator_name"], "target", ms_folder
+                DATA_DIR, field["target_name"], "target", ms_folder
             )
             if os.path.exists(calibrator_full_path):
                 if field["sas_id_calibrator1"]:
