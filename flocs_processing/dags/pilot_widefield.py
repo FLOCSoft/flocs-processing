@@ -165,71 +165,81 @@ def pilot_widefield():
                 )
                 num_staged_targ = int(out.strip())
 
-            if field["sas_id_calibrator1"]:
-                ms_folder = f"L{field['sas_id_calibrator1']}"
-                cal1_full_path = os.path.join(
-                    DATA_DIR, field["target_name"], "calibrator", ms_folder
-                )
-                if os.path.exists(cal1_full_path):
-                    num_downloaded_calib1 = len(
-                        list(pathlib.Path(cal1_full_path).glob("*.MS"))
-                    )
-                else:
-                    stage_calibrators = True
-
-            if field["sas_id_calibrator2"]:
-                ms_folder = f"L{field['sas_id_calibrator2']}"
-                cal2_full_path = os.path.join(
-                    DATA_DIR, field["target_name"], "calibrator", ms_folder
-                )
-                if os.path.exists(cal2_full_path):
-                    num_downloaded_calib2 = len(
-                        list(pathlib.Path(cal2_full_path).glob("*.MS"))
-                    )
-                else:
-                    stage_calibrators = True
-
-            num_downloaded_calib = num_downloaded_calib1 + num_downloaded_calib2
-            if num_downloaded_calib == num_staged_calib:
-                print(
-                    f"Number of staged calibrator MSes ({num_staged_calib}) equals number of downloaded MSes ({num_downloaded_calib}); not staging calibrators again."
-                )
-                stage_calibrators = False
-            else:
-                print(
-                    f"Number of staged calibrator MSes ({num_staged_calib}) does NOT equal number of downloaded MSes ({num_downloaded_calib}); restaging calibrators and resuming download."
-                )
-                stage_calibrators = True
-
-            stage_target = False
-            if field["sas_id_target"]:
-                ms_folder = f"L{field['sas_id_target']}"
-                target_full_path = os.path.join(
-                    DATA_DIR, field["target_name"], "target", ms_folder
-                )
-                if os.path.exists(target_full_path):
-                    num_downloaded_targ = len(
-                        list(pathlib.Path(target_full_path).glob("*.MS"))
-                    )
-                    if num_downloaded_targ == num_staged_targ:
-                        print(
-                            f"Number of staged target MSes ({num_staged_targ}) equals number of downloaded MSes ({num_downloaded_targ}); not staging target again."
-                        )
-                        stage_target = False
-                        target_downloaded = True
-                    else:
-                        print(
-                            f"Number of staged target MSes ({num_staged_targ}) does NOT equal number of downloaded MSes ({num_downloaded_targ}); staging target again and resuming download."
-                        )
-                        stage_target = True
-                        target_downloaded = False
-                else:
-                    stage_target = True
-                    target_downloaded = False
-            else:
+            if ("sas_id_target" not in field) or (not field["sas_id_target"]):
                 raise AirflowFailException(
                     f"No target SAS ID in database for field {field['target_name']}"
                 )
+
+            ms_folder = f"L{field['sas_id_target']}"
+            calibrator_full_path = os.path.join(
+                DATA_DIR, field["calibrator_name"], "target", ms_folder
+            )
+            if os.path.exists(calibrator_full_path):
+                if field["sas_id_calibrator1"]:
+                    ms_folder = f"L{field['sas_id_calibrator1']}"
+                    cal1_full_path = os.path.join(
+                        DATA_DIR, field["target_name"], "calibrator", ms_folder
+                    )
+                    if os.path.exists(cal1_full_path):
+                        num_downloaded_calib1 = len(
+                            list(pathlib.Path(cal1_full_path).glob("*.MS"))
+                        )
+                    else:
+                        stage_calibrators = True
+
+                if field["sas_id_calibrator2"]:
+                    ms_folder = f"L{field['sas_id_calibrator2']}"
+                    cal2_full_path = os.path.join(
+                        DATA_DIR, field["target_name"], "calibrator", ms_folder
+                    )
+                    if os.path.exists(cal2_full_path):
+                        num_downloaded_calib2 = len(
+                            list(pathlib.Path(cal2_full_path).glob("*.MS"))
+                        )
+                    else:
+                        stage_calibrators = True
+
+                num_downloaded_calib = num_downloaded_calib1 + num_downloaded_calib2
+                if num_downloaded_calib == num_staged_calib:
+                    print(
+                        f"Number of staged calibrator MSes ({num_staged_calib}) equals number of downloaded MSes ({num_downloaded_calib}); not staging calibrators again."
+                    )
+                    stage_calibrators = False
+                    calibrator_downloaded = True
+                else:
+                    print(
+                        f"Number of staged calibrator MSes ({num_staged_calib}) does NOT equal number of downloaded MSes ({num_downloaded_calib}); restaging calibrators and resuming download."
+                    )
+                    stage_calibrators = True
+                    calibrator_downloaded = False
+            else:
+                stage_calibrators = True
+                calibrator_downloaded = False
+
+            stage_target = False
+            ms_folder = f"L{field['sas_id_target']}"
+            target_full_path = os.path.join(
+                DATA_DIR, field["target_name"], "target", ms_folder
+            )
+            if os.path.exists(target_full_path):
+                num_downloaded_targ = len(
+                    list(pathlib.Path(target_full_path).glob("*.MS"))
+                )
+                if num_downloaded_targ == num_staged_targ:
+                    print(
+                        f"Number of staged target MSes ({num_staged_targ}) equals number of downloaded MSes ({num_downloaded_targ}); not staging target again."
+                    )
+                    stage_target = False
+                    target_downloaded = True
+                else:
+                    print(
+                        f"Number of staged target MSes ({num_staged_targ}) does NOT equal number of downloaded MSes ({num_downloaded_targ}); staging target again and resuming download."
+                    )
+                    stage_target = True
+                    target_downloaded = False
+            else:
+                stage_target = True
+                target_downloaded = False
 
             if stage_calibrators or stage_target:
                 print(f"Field {field['sas_id_target']} is not downloaded.")
