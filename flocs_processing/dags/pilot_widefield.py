@@ -271,6 +271,9 @@ def pilot_widefield():
                         == STAGING_STATUS.partial_success
                     ):
                         if schedule_tries_cal < MAX_RESCHEDULES_CALIBRATOR:
+                            print(
+                                f"Partial success for calibrator; rescheduling {MAX_RESCHEDULES_CALIBRATOR - schedule_tries_cal} more times."
+                            )
                             reschedule(stage_id_calibrators)
                             schedule_tries_cal += 1
                             continue
@@ -305,6 +308,9 @@ def pilot_widefield():
                 if not target_downloaded:
                     if get_status(stage_id_target) == STAGING_STATUS.partial_success:
                         if schedule_tries_tar < MAX_RESCHEDULES_TARGET:
+                            print(
+                                f"Partial success for target; rescheduling {MAX_RESCHEDULES_TARGET - schedule_tries_tar} more times."
+                            )
                             reschedule(stage_id_target)
                             schedule_tries_tar += 1
                             continue
