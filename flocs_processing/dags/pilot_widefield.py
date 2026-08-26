@@ -216,11 +216,16 @@ def pilot_widefield():
                             f"Number of staged target MSes ({num_staged_targ}) equals number of downloaded MSes ({num_downloaded_targ}); not staging target again."
                         )
                         stage_target = False
+                        target_downloaded = True
                     else:
                         print(
                             f"Number of staged target MSes ({num_staged_targ}) does NOT equal number of downloaded MSes ({num_downloaded_targ}); staging target again and resuming download."
                         )
                         stage_target = True
+                        target_downloaded = False
+                else:
+                    stage_target = True
+                    target_downloaded = False
             else:
                 raise AirflowFailException(
                     f"No target SAS ID in database for field {field['target_name']}"
@@ -246,8 +251,7 @@ def pilot_widefield():
 
             calibrator_staged = False
             target_staged = False
-            calibrator_downloaded = not stage_calibrators
-            target_downloaded = not stage_target
+            calibrator_downloaded = False
             schedule_tries_cal = 0
             schedule_tries_tar = 0
             while True:
@@ -326,6 +330,7 @@ def pilot_widefield():
                 if calibrator_downloaded and target_downloaded:
                     break
                 time.sleep(60)
+            return field
 
     @task
     def run_linc_calibrator1(field):
