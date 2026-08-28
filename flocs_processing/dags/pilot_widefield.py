@@ -1,3 +1,4 @@
+from enum import Enum
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
 from flocs_processing.pipeline_runners import (
     get_most_recent_run,
@@ -23,19 +24,18 @@ import datetime
 import os
 import pathlib
 import random
-import re
 import sqlite3
 import subprocess
 import time
 
 from airflow.exceptions import AirflowFailException
-from airflow.sdk import dag, get_current_context, task
+from airflow.sdk import dag, task
 from airflow.providers.standard.sensors.python import PythonSensor
 from airflow.sdk.exceptions import AirflowSkipException
 from airflow.task.trigger_rule import TriggerRule
 from flocs_lta.lta_search import ObservationStager
 from autoPILOT.ilotss.assess_calibrators import assess_and_compare
-from stager_access import get_surls_requested, get_surls_online
+from stager_access import get_surls_requested, get_surls_online, reschedule, get_status
 
 if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
     raise RuntimeError(
@@ -76,6 +76,34 @@ CWL_RUNNER_PILOT_DDCAL = "toil"
 
 CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
 
+
+class STAGING_PROGRESS(Enum):
+    success = "C"
+    partial_success = "I"
+    failed = "E"
+    aborted = "A"
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return self.value == other
+        elif other.__class__ is self.__class__:
+            return self.value == other.value
+        else:
+            raise NotImplementedError
+
+class STAGING_STATUS(Enum):
+    success = "success"
+    partial_success = "partial success"
+    failed = "failed"
+    aborted = "aborted"
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return self.value == other
+        elif other.__class__ is self.__class__:
+            return self.value == other.value
+        else:
+            raise NotImplementedError
 
 def get_approval(field, identifier, needs_approval):
     if not needs_approval:
@@ -121,6 +149,9 @@ def pilot_widefield():
 
     @task
     def download_field(field):
+        ACCEPTED_ONLINE_FRACTION = 0.95
+        MAX_RESCHEDULES_CALIBRATOR = 3
+        MAX_RESCHEDULES_TARGET = 3
         if field["downloaded"]:
             return field
         else:
@@ -147,66 +178,81 @@ def pilot_widefield():
                 )
                 num_staged_targ = int(out.strip())
 
-            if field["sas_id_calibrator1"]:
-                ms_folder = f"L{field['sas_id_calibrator1']}"
-                cal1_full_path = os.path.join(
-                    DATA_DIR, field["target_name"], "calibrator", ms_folder
-                )
-                if os.path.exists(cal1_full_path):
-                    num_downloaded_calib1 = len(
-                        list(pathlib.Path(cal1_full_path).glob("*.MS"))
-                    )
-                else:
-                    stage_calibrators = True
-
-            if field["sas_id_calibrator2"]:
-                ms_folder = f"L{field['sas_id_calibrator2']}"
-                cal2_full_path = os.path.join(
-                    DATA_DIR, field["target_name"], "calibrator", ms_folder
-                )
-                if os.path.exists(cal2_full_path):
-                    num_downloaded_calib2 = len(
-                        list(pathlib.Path(cal2_full_path).glob("*.MS"))
-                    )
-                else:
-                    stage_calibrators = True
-
-            num_downloaded_calib = num_downloaded_calib1 + num_downloaded_calib2
-            if num_downloaded_calib == num_staged_calib:
-                print(
-                    f"Number of staged calibrator MSes ({num_staged_calib}) equals number of downloaded MSes ({num_downloaded_calib}); not staging calibrators again."
-                )
-                stage_calibrators = False
-            else:
-                print(
-                    f"Number of staged calibrator MSes ({num_staged_calib}) does NOT equal number of downloaded MSes ({num_downloaded_calib}); restaging calibrators and resuming download."
-                )
-                stage_calibrators = True
-
-            stage_target = False
-            if field["sas_id_target"]:
-                ms_folder = f"L{field['sas_id_target']}"
-                target_full_path = os.path.join(
-                    DATA_DIR, field["target_name"], "target", ms_folder
-                )
-                if os.path.exists(target_full_path):
-                    num_downloaded_targ = len(
-                        list(pathlib.Path(target_full_path).glob("*.MS"))
-                    )
-                    if num_downloaded_targ == num_staged_targ:
-                        print(
-                            f"Number of staged target MSes ({num_staged_targ}) equals number of downloaded MSes ({num_downloaded_targ}); not staging target again."
-                        )
-                        stage_target = False
-                    else:
-                        print(
-                            f"Number of staged target MSes ({num_staged_targ}) does NOT equal number of downloaded MSes ({num_downloaded_targ}); staging target again and resuming download."
-                        )
-                        stage_target = True
-            else:
+            if ("sas_id_target" not in field) or (not field["sas_id_target"]):
                 raise AirflowFailException(
                     f"No target SAS ID in database for field {field['target_name']}"
                 )
+
+            ms_folder = f"L{field['sas_id_target']}"
+            calibrator_full_path = os.path.join(
+                DATA_DIR, field["target_name"], "target", ms_folder
+            )
+            if os.path.exists(calibrator_full_path):
+                if field["sas_id_calibrator1"]:
+                    ms_folder = f"L{field['sas_id_calibrator1']}"
+                    cal1_full_path = os.path.join(
+                        DATA_DIR, field["target_name"], "calibrator", ms_folder
+                    )
+                    if os.path.exists(cal1_full_path):
+                        num_downloaded_calib1 = len(
+                            list(pathlib.Path(cal1_full_path).glob("*.MS"))
+                        )
+                    else:
+                        stage_calibrators = True
+
+                if field["sas_id_calibrator2"]:
+                    ms_folder = f"L{field['sas_id_calibrator2']}"
+                    cal2_full_path = os.path.join(
+                        DATA_DIR, field["target_name"], "calibrator", ms_folder
+                    )
+                    if os.path.exists(cal2_full_path):
+                        num_downloaded_calib2 = len(
+                            list(pathlib.Path(cal2_full_path).glob("*.MS"))
+                        )
+                    else:
+                        stage_calibrators = True
+
+                num_downloaded_calib = num_downloaded_calib1 + num_downloaded_calib2
+                if num_downloaded_calib == num_staged_calib:
+                    print(
+                        f"Number of staged calibrator MSes ({num_staged_calib}) equals number of downloaded MSes ({num_downloaded_calib}); not staging calibrators again."
+                    )
+                    stage_calibrators = False
+                    calibrator_downloaded = True
+                else:
+                    print(
+                        f"Number of staged calibrator MSes ({num_staged_calib}) does NOT equal number of downloaded MSes ({num_downloaded_calib}); restaging calibrators and resuming download."
+                    )
+                    stage_calibrators = True
+                    calibrator_downloaded = False
+            else:
+                stage_calibrators = True
+                calibrator_downloaded = False
+
+            stage_target = False
+            ms_folder = f"L{field['sas_id_target']}"
+            target_full_path = os.path.join(
+                DATA_DIR, field["target_name"], "target", ms_folder
+            )
+            if os.path.exists(target_full_path):
+                num_downloaded_targ = len(
+                    list(pathlib.Path(target_full_path).glob("*.MS"))
+                )
+                if num_downloaded_targ == num_staged_targ:
+                    print(
+                        f"Number of staged target MSes ({num_staged_targ}) equals number of downloaded MSes ({num_downloaded_targ}); not staging target again."
+                    )
+                    stage_target = False
+                    target_downloaded = True
+                else:
+                    print(
+                        f"Number of staged target MSes ({num_staged_targ}) does NOT equal number of downloaded MSes ({num_downloaded_targ}); staging target again and resuming download."
+                    )
+                    stage_target = True
+                    target_downloaded = False
+            else:
+                stage_target = True
+                target_downloaded = False
 
             if stage_calibrators or stage_target:
                 print(f"Field {field['sas_id_target']} is not downloaded.")
@@ -228,12 +274,25 @@ def pilot_widefield():
 
             calibrator_staged = False
             target_staged = False
-            calibrator_downloaded = not stage_calibrators
-            target_downloaded = not stage_target
+            calibrator_downloaded = False
+            schedule_tries_cal = 0
+            schedule_tries_tar = 0
             while True:
                 if not calibrator_downloaded:
-                    if len(get_surls_online(stage_id_calibrators)) == len(
-                        get_surls_requested(stage_id_calibrators)
+                    if (
+                        get_status(stage_id_calibrators)
+                        == STAGING_STATUS.partial_success
+                    ):
+                        if schedule_tries_cal < MAX_RESCHEDULES_CALIBRATOR:
+                            print(
+                                f"Partial success for calibrator; rescheduling {MAX_RESCHEDULES_CALIBRATOR - schedule_tries_cal} more times."
+                            )
+                            reschedule(stage_id_calibrators)
+                            schedule_tries_cal += 1
+                            continue
+                    if len(get_surls_online(stage_id_calibrators)) >= int(
+                        ACCEPTED_ONLINE_FRACTION
+                        * len(get_surls_requested(stage_id_calibrators))
                     ):
                         calibrator_staged = True
                     if calibrator_staged and not calibrator_downloaded:
@@ -260,8 +319,17 @@ def pilot_widefield():
                                 raise RuntimeError
 
                 if not target_downloaded:
-                    if len(get_surls_online(stage_id_target)) == len(
-                        get_surls_requested(stage_id_target)
+                    if get_status(stage_id_target) == STAGING_STATUS.partial_success:
+                        if schedule_tries_tar < MAX_RESCHEDULES_TARGET:
+                            print(
+                                f"Partial success for target; rescheduling {MAX_RESCHEDULES_TARGET - schedule_tries_tar} more times."
+                            )
+                            reschedule(stage_id_target)
+                            schedule_tries_tar += 1
+                            continue
+                    if len(get_surls_online(stage_id_target)) >= int(
+                        ACCEPTED_ONLINE_FRACTION
+                        * len(get_surls_requested(stage_id_target))
                     ):
                         target_staged = True
                     if target_staged and not target_downloaded:
@@ -291,6 +359,7 @@ def pilot_widefield():
                 if calibrator_downloaded and target_downloaded:
                     break
                 time.sleep(60)
+            return field
 
     @task
     def run_linc_calibrator1(field):
