@@ -177,6 +177,7 @@ class FlocsAirflowProcessor:
         else:
             logger.info("Writing environment settings to source_flocs_airflow.sh")
             with open("source_flocs_airflow.sh", "w") as f:
+                f.write(f"export FLOCS_AIRFLOW_CONFIG={os.environ['FLOCS_AIRFLOW_CONFIG']}\n")
                 for kw in self.REQUIRED_AIRFLOW_VARS:
                     f.write(f"export {kw}={os.environ[kw]}\n")
 
