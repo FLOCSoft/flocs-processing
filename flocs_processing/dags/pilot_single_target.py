@@ -1,172 +1,251 @@
 from enum import Enum
+from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
+from flocs_processing.pipeline_runners import (
+    get_most_recent_run,
+    run_linc_calibrator_cwltool,
+    run_linc_calibrator_toil,
+    run_linc_target_cwltool,
+    run_linc_target_toil,
+    run_pilot_delay_cwltool,
+    run_pilot_delay_toil,
+    run_pilot_ddcal_cwltool,
+    run_pilot_ddcal_toil,
+)
+
+import configparser
 import datetime
-import functools
 import os
 import pathlib
-import re
+import random
 import sqlite3
 import subprocess
 import time
 
-from airflow.exceptions import AirflowFailException, AirflowSkipException
-from airflow.sdk import dag, get_current_context, task
+from airflow.exceptions import AirflowFailException
+from airflow.sdk import dag, task
+from airflow.providers.standard.sensors.python import PythonSensor
+from airflow.sdk.exceptions import AirflowSkipException
 from airflow.task.trigger_rule import TriggerRule
 from flocs_lta.lta_search import ObservationStager
-from stager_access import get_surls_requested, get_surls_online
+from autoPILOT.ilotss.assess_calibrators import assess_and_compare
+from stager_access import get_surls_requested, get_surls_online, reschedule, get_status
 
-# Need to replace this with a config file
-TABLE_NAME = ""
-DATABASE = ""
-SLURM_ACCOUNT = ""
-SLURM_QUEUE = ""
-DATA_DIR = ""
-OUTPUT_DIR = ""
-PROCESSING_DIR = ""
-NN_MODEL_CACHE = ""
+if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
+    raise RuntimeError(
+        "FLOCS_AIRFLOW_CONFIG environment variable not set. Please point this to a valid configuration file."
+    )
+
+CONFIG_FILE: str = os.getenv("FLOCS_AIRFLOW_CONFIG") or ""
+if not os.path.isfile(CONFIG_FILE):
+    raise RuntimeError(f"{CONFIG_FILE} is not a valid file")
+
+parser = configparser.ConfigParser()
+parser.optionxform = str  # ty: ignore[invalid-assignment]
+with open(CONFIG_FILE, "r") as config:
+    parser.read_string("[DEFAULT]\n" + config.read())
+
+print("Config summary:")
+for k, v in parser["DEFAULT"].items():
+    print(f"{k}: {v}")
+
+TABLE_NAME = parser["DEFAULT"]["TABLE_NAME"]
+DATABASE = parser["DEFAULT"]["DATABASE"]
+SLURM_ACCOUNT = parser["DEFAULT"]["SLURM_ACCOUNT"]
+SLURM_QUEUE = parser["DEFAULT"]["SLURM_QUEUE"]
+DATA_DIR = parser["DEFAULT"]["DATA_DIR"]
+OUTPUT_DIR = parser["DEFAULT"]["OUTPUT_DIR"]
+PROCESSING_DIR = parser["DEFAULT"]["PROCESSING_DIR"]
+NN_MODEL_CACHE = parser["DEFAULT"]["NN_MODEL_CACHE"]
+DDF_CONFIG = parser["DEFAULT"]["DDF_CONFIG"]
+FLUX_CALIBRATOR_TEMPLATE = parser["DEFAULT"]["FLUX_CALIBRATOR_TEMPLATE"]
+NEEDS_MANUAL_APPROVAL_DELAY = parser.getboolean(
+    "DEFAULT", "NEEDS_MANUAL_APPROVAL_DELAY"
+)
+
+CWL_RUNNER_LINC_CALIBRATOR = "cwltool"
+CWL_RUNNER_LINC_TARGET = "toil"
+CWL_RUNNER_PILOT_DELAY = "toil"
+CWL_RUNNER_PILOT_DDCAL = "toil"
+
+CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
 
 
-@functools.total_ordering
-class PIPELINE_STATUS(Enum):
-    nothing = 0
-    downloaded = 1
-    finished = 2
-    running = 3
-    processing = 98
-    error = 99
+class STAGING_PROGRESS(Enum):
+    success = "C"
+    partial_success = "I"
+    failed = "E"
+    aborted = "A"
 
     def __eq__(self, other):
-        if other.__class__ is int:
+        if isinstance(other, str):
             return self.value == other
         elif other.__class__ is self.__class__:
             return self.value == other.value
         else:
             raise NotImplementedError
 
-    def __lt__(self, other):
-        if self.__class__ is not other.__class__:
+class STAGING_STATUS(Enum):
+    success = "success"
+    partial_success = "partial success"
+    failed = "failed"
+    aborted = "aborted"
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return self.value == other
+        elif other.__class__ is self.__class__:
+            return self.value == other.value
+        else:
             raise NotImplementedError
-        return self.value < other.value
 
-
-def get_db_columns():
+def get_approval(field, identifier, needs_approval):
+    if not needs_approval:
+        return field
     with sqlite3.connect(DATABASE) as db:
         db.row_factory = sqlite3.Row
         cursor = db.cursor()
-        columns = "target_name,priority,finished,downloaded,sas_id_calibrator1,sas_id_calibrator2,sas_id_calibrator_final,sas_id_target,status_calibrator1,status_calibrator2,status_target,status_vlbi_delay,status_vlbi_dd"
+        columns = f"sas_id_target,status_{identifier}"
         field = cursor.execute(
-            f"select {columns} from {TABLE_NAME} where finished==0 order by priority desc"
+            f"select {columns} from {TABLE_NAME} where sas_id_target=='{field['sas_id_target']}'"
         ).fetchall()
-        print(field)
-    return field
+        status = field[0][f"status_{identifier}"]
+    if status == PIPELINE_STATUS.finished.value:
+        return field
 
 
-def set_status_processing(name, identifier, target):
-    with sqlite3.connect(DATABASE) as db:
-        cursor = db.cursor()
-        cursor.execute(
-            f"update {TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.processing.value} where target_name=='{name}' and sas_id_target=='{target}'"
-        )
-
-
-def set_status_finished(name, identifier, target):
-    with sqlite3.connect(DATABASE) as db:
-        cursor = db.cursor()
-        cursor.execute(
-            f"update {TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.finished.value} where target_name=='{name}' and sas_id_target=='{target}'"
-        )
-
-
-def set_status_downloaded(name, target):
-    with sqlite3.connect(DATABASE) as db:
-        cursor = db.cursor()
-        cursor.execute(
-            f"update {TABLE_NAME} set downloaded=1 where target_name=='{name}' and sas_id_target=='{target}'"
-        )
-
-
-def set_field_finished(name, target):
-    query = f"update {TABLE_NAME} set finished=1 where target_name=='{name}' and sas_id_target=='{target}'"
-    with sqlite3.connect(DATABASE) as db:
-        cursor = db.cursor()
-        cursor.execute(query)
-
-
-def set_final_calibrator(name, target, final_cal):
-    with sqlite3.connect(DATABASE) as db:
-        cursor = db.cursor()
-        cursor.execute(
-            f"update {TABLE_NAME} set sas_id_calibrator_final={final_cal} where target_name=='{name}' and sas_id_target=='{target}'"
-        )
-
-
-def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.Path:
-    rundirs = pathlib.Path(searchpath)
-    rundirs_sorted = sorted(rundirs.iterdir())
-    if pipeline:
-        rundirs_sorted_filtered = [
-            d
-            for d in rundirs_sorted
-            if ((sas_id in d.parts[-1]) and (pipeline in d.parts[-1])) and d.is_dir()
-        ]
-    else:
-        rundirs_sorted_filtered = [d for d in rundirs_sorted if sas_id in d.parts[-1]]
-    rundir_final = rundirs_sorted_filtered[-1].absolute()
-    return rundir_final
-
-
-@dag(max_active_runs=1)
+@dag(max_active_runs=4)
 def pilot_single_target():
     @task
     def get_unprocessed_target():
-        field = dict(get_db_columns()[0])
+        field = None
+        for dbrow in CURRENT_DB.get_db_columns():
+            is_processing = False
+            row = dict(dbrow)
+            status_keys = filter(lambda x: x.startswith("status_"), row.keys())
+            for key in status_keys:
+                if row[key] == PIPELINE_STATUS.processing.value:
+                    is_processing = True
+                    break
+            if not is_processing:
+                # Only select a field if nothing is processing it.
+                field = row
+                break
+        if not field:
+            raise AirflowSkipException("No unprocessed fields found.")
         print(field["target_name"])
         return field
 
     @task.short_circuit
     def check_fields():
-        fields = get_db_columns()
+        fields = CURRENT_DB.get_db_columns()
         return bool(fields)
 
     @task
     def download_field(field):
+        ACCEPTED_ONLINE_FRACTION = 0.95
+        MAX_RESCHEDULES_CALIBRATOR = 3
+        MAX_RESCHEDULES_TARGET = 3
         if field["downloaded"]:
             return field
         else:
-            has_cal1 = False
             stage_calibrators = False
-            if field["sas_id_calibrator1"]:
-                ms_folder = f"L{field['sas_id_calibrator1']}"
-                cal1_full_path = os.path.join(
-                    DATA_DIR, field["target_name"], "calibrator", ms_folder
+            num_downloaded_calib1 = 0
+            num_downloaded_calib2 = 0
+            num_staged_calib = 0
+            num_staged_targ = 0
+            if os.path.exists(f"srms_{field['sas_id_target']}_calibrators.txt"):
+                print("Found srm file; counting calibrator SRMs.")
+                out = subprocess.check_output(
+                    f"wc -l srms_{field['sas_id_target']}_calibrators.txt | cut -f 1 -d ' '",
+                    text=True,
+                    shell=True,
                 )
-                if os.path.exists(cal1_full_path):
-                    has_cal1 = True
-                else:
-                    stage_calibrators = True
+                num_staged_calib = int(out.strip())
 
-            has_cal2 = False
-            if field["sas_id_calibrator2"]:
-                ms_folder = f"L{field['sas_id_calibrator2']}"
-                cal2_full_path = os.path.join(
-                    DATA_DIR, field["target_name"], "calibrator", ms_folder
+            if os.path.exists(f"srms_{field['sas_id_target']}.txt"):
+                print("Found srm file; counting target SRMs.")
+                out = subprocess.check_output(
+                    f"wc -l srms_{field['sas_id_target']}.txt | cut -f 1 -d ' '",
+                    text=True,
+                    shell=True,
                 )
-                if os.path.exists(cal2_full_path):
-                    has_cal2 = True
-                else:
-                    stage_calibrators = True
-            if field["sas_id_target"]:
-                ms_folder = f"L{field['sas_id_target']}"
-                target_full_path = os.path.join(
-                    DATA_DIR, field["target_name"], "target", ms_folder
-                )
-                if os.path.exists(target_full_path):
-                    stage_target = False
-                else:
-                    stage_target = True
-            else:
+                num_staged_targ = int(out.strip())
+
+            if ("sas_id_target" not in field) or (not field["sas_id_target"]):
                 raise AirflowFailException(
                     f"No target SAS ID in database for field {field['target_name']}"
                 )
+
+            ms_folder = f"L{field['sas_id_target']}"
+            calibrator_full_path = os.path.join(
+                DATA_DIR, field["target_name"], "target", ms_folder
+            )
+            if os.path.exists(calibrator_full_path):
+                if field["sas_id_calibrator1"]:
+                    ms_folder = f"L{field['sas_id_calibrator1']}"
+                    cal1_full_path = os.path.join(
+                        DATA_DIR, field["target_name"], "calibrator", ms_folder
+                    )
+                    if os.path.exists(cal1_full_path):
+                        num_downloaded_calib1 = len(
+                            list(pathlib.Path(cal1_full_path).glob("*.MS"))
+                        )
+                    else:
+                        stage_calibrators = True
+
+                if field["sas_id_calibrator2"]:
+                    ms_folder = f"L{field['sas_id_calibrator2']}"
+                    cal2_full_path = os.path.join(
+                        DATA_DIR, field["target_name"], "calibrator", ms_folder
+                    )
+                    if os.path.exists(cal2_full_path):
+                        num_downloaded_calib2 = len(
+                            list(pathlib.Path(cal2_full_path).glob("*.MS"))
+                        )
+                    else:
+                        stage_calibrators = True
+
+                num_downloaded_calib = num_downloaded_calib1 + num_downloaded_calib2
+                if num_downloaded_calib == num_staged_calib:
+                    print(
+                        f"Number of staged calibrator MSes ({num_staged_calib}) equals number of downloaded MSes ({num_downloaded_calib}); not staging calibrators again."
+                    )
+                    stage_calibrators = False
+                    calibrator_downloaded = True
+                else:
+                    print(
+                        f"Number of staged calibrator MSes ({num_staged_calib}) does NOT equal number of downloaded MSes ({num_downloaded_calib}); restaging calibrators and resuming download."
+                    )
+                    stage_calibrators = True
+                    calibrator_downloaded = False
+            else:
+                stage_calibrators = True
+                calibrator_downloaded = False
+
+            stage_target = False
+            ms_folder = f"L{field['sas_id_target']}"
+            target_full_path = os.path.join(
+                DATA_DIR, field["target_name"], "target", ms_folder
+            )
+            if os.path.exists(target_full_path):
+                num_downloaded_targ = len(
+                    list(pathlib.Path(target_full_path).glob("*.MS"))
+                )
+                if num_downloaded_targ == num_staged_targ:
+                    print(
+                        f"Number of staged target MSes ({num_staged_targ}) equals number of downloaded MSes ({num_downloaded_targ}); not staging target again."
+                    )
+                    stage_target = False
+                    target_downloaded = True
+                else:
+                    print(
+                        f"Number of staged target MSes ({num_staged_targ}) does NOT equal number of downloaded MSes ({num_downloaded_targ}); staging target again and resuming download."
+                    )
+                    stage_target = True
+                    target_downloaded = False
+            else:
+                stage_target = True
+                target_downloaded = False
 
             if stage_calibrators or stage_target:
                 print(f"Field {field['sas_id_target']} is not downloaded.")
@@ -175,11 +254,11 @@ def pilot_single_target():
                     "ALL",
                     field["sas_id_target"],
                     None,
-                    120e6,
-                    168e6,
+                    120,
+                    168,
                 )
                 if stage_calibrators:
-                    stager.find_nearest_calibrators(2, 120e6, 168e6)
+                    stager.find_nearest_calibrators(2, 120, 168)
                     stage_id_calibrators = stager.stage_calibrators()
                 if stage_target:
                     stage_id_target = stager.stage_target()
@@ -188,172 +267,136 @@ def pilot_single_target():
 
             calibrator_staged = False
             target_staged = False
-            calibrator_downloaded = has_cal1 or has_cal2
-            target_downloaded = not stage_target
+            calibrator_downloaded = False
+            schedule_tries_cal = 0
+            schedule_tries_tar = 0
             while True:
-                if len(get_surls_online(stage_id_calibrators)) == len(
-                    get_surls_requested(stage_id_calibrators)
-                ):
-                    calibrator_staged = True
-                if calibrator_staged and not calibrator_downloaded:
-                    dl_path = os.path.join(DATA_DIR, field["target_name"], "calibrator")
-                    cmd = (
-                        f"flocs-lta download --outdir {dl_path} {stage_id_calibrators}"
-                    )
-                    with open(
-                        f"log_download_calibrators_{field['target_name']}.txt",
-                        "w+",
-                    ) as f_out, open(
-                        f"log_download_calibrators_{field['target_name']}.txt",
-                        "w+",
-                    ) as f_err:
-                        proc = subprocess.run(
-                            cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                        )
-                        if not proc.returncode:
-                            calibrator_downloaded = True
-                        else:
-                            raise RuntimeError
-
-                if len(get_surls_online(stage_id_target)) == len(
-                    get_surls_requested(stage_id_target)
-                ):
-                    calibrator_staged = True
-                if target_staged and not target_downloaded:
-                    dl_path = os.path.join(DATA_DIR, field["target_name"], "target")
-                    cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
-                    with open(
-                        f"log_download_calibrators_{field['target_name']}.txt",
-                        "w+",
-                    ) as f_out, open(
-                        f"log_download_calibrators_{field['target_name']}.txt",
-                        "w+",
-                    ) as f_err:
-                        proc = subprocess.run(
-                            cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                        )
-                        if not proc.returncode:
-                            set_status_downloaded(
-                                field["target_name"],
-                                field["sas_id_target"],
+                if not calibrator_downloaded:
+                    if (
+                        get_status(stage_id_calibrators)
+                        == STAGING_STATUS.partial_success
+                    ):
+                        if schedule_tries_cal < MAX_RESCHEDULES_CALIBRATOR:
+                            print(
+                                f"Partial success for calibrator; rescheduling {MAX_RESCHEDULES_CALIBRATOR - schedule_tries_cal} more times."
                             )
-                            target_downloaded = True
-                        else:
-                            raise RuntimeError
+                            reschedule(stage_id_calibrators)
+                            schedule_tries_cal += 1
+                            continue
+                    if len(get_surls_online(stage_id_calibrators)) >= int(
+                        ACCEPTED_ONLINE_FRACTION
+                        * len(get_surls_requested(stage_id_calibrators))
+                    ):
+                        calibrator_staged = True
+                    if calibrator_staged and not calibrator_downloaded:
+                        dl_path = os.path.join(
+                            DATA_DIR, field["target_name"], "calibrator"
+                        )
+                        cmd = f"flocs-lta download --outdir {dl_path} {stage_id_calibrators}"
+                        with (
+                            open(
+                                f"log_download_calibrators_{field['target_name']}.txt",
+                                "w+",
+                            ) as f_out,
+                            open(
+                                f"log_download_calibrators_{field['target_name']}_err.txt",
+                                "w+",
+                            ) as f_err,
+                        ):
+                            proc = subprocess.run(
+                                cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                            )
+                            if not proc.returncode:
+                                calibrator_downloaded = True
+                            else:
+                                raise RuntimeError
+
+                if not target_downloaded:
+                    if get_status(stage_id_target) == STAGING_STATUS.partial_success:
+                        if schedule_tries_tar < MAX_RESCHEDULES_TARGET:
+                            print(
+                                f"Partial success for target; rescheduling {MAX_RESCHEDULES_TARGET - schedule_tries_tar} more times."
+                            )
+                            reschedule(stage_id_target)
+                            schedule_tries_tar += 1
+                            continue
+                    if len(get_surls_online(stage_id_target)) >= int(
+                        ACCEPTED_ONLINE_FRACTION
+                        * len(get_surls_requested(stage_id_target))
+                    ):
+                        target_staged = True
+                    if target_staged and not target_downloaded:
+                        dl_path = os.path.join(DATA_DIR, field["target_name"], "target")
+                        cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
+                        with (
+                            open(
+                                f"log_download_target_{field['target_name']}.txt",
+                                "w+",
+                            ) as f_out,
+                            open(
+                                f"log_download_target_{field['target_name']}_err.txt",
+                                "w+",
+                            ) as f_err,
+                        ):
+                            proc = subprocess.run(
+                                cmd, shell=True, text=True, stdout=f_out, stderr=f_err
+                            )
+                            if not proc.returncode:
+                                CURRENT_DB.set_status_downloaded(
+                                    field["target_name"],
+                                    field["sas_id_target"],
+                                )
+                                target_downloaded = True
+                            else:
+                                raise RuntimeError
                 if calibrator_downloaded and target_downloaded:
                     break
                 time.sleep(60)
+            return field
 
     @task
     def run_linc_calibrator1(field):
-        if (field["status_calibrator1"] == PIPELINE_STATUS.finished) or (
-            field["status_calibrator1"] == PIPELINE_STATUS.running
-        ):
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        if not field["sas_id_calibrator1"]:
+            raise AirflowSkipException("Calibrator 1 does not exist, skipping.")
+        if field["status_calibrator1"] == PIPELINE_STATUS.finished.value:
             print(
                 f"Flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']} already processed."
             )
             return field
         else:
-            print(
-                f"Processing flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']}"
-            )
-            ms_folder = f"L{field['sas_id_calibrator1']}"
-            set_status_processing(
-                field["target_name"], "calibrator1", field["sas_id_target"]
-            )
-            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-            cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
-            if not os.path.isdir(outdir):
-                os.mkdir(outdir)
-            print(cmd)
-            with open(
-                f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator1']}.txt",
-                "w+",
-            ) as f_out, open(
-                f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator1']}_err.txt",
-                "w+",
-            ) as f_err:
-                proc = subprocess.run(
-                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                )
-                success = False
-                pattern = re.compile(r"Workflow.* stopped. Success: True")
-                if not proc.returncode:
-                    f_err.seek(0)
-                    if pattern.search(f_err.read()):
-                        success = True
-                if success:
-                    set_status_finished(
-                        field["target_name"], "calibrator1", field["sas_id_target"]
-                    )
-                else:
-                    raise RuntimeError
+            if CWL_RUNNER_LINC_CALIBRATOR == "cwltool":
+                run_linc_calibrator_cwltool(field, calibrator_field=1, db=CURRENT_DB)
+            elif CWL_RUNNER_LINC_CALIBRATOR == "toil":
+                run_linc_calibrator_toil(field, calibrator_field=1, db=CURRENT_DB)
+            else:
+                raise RuntimeError("Invalid CWL runner specified.")
         return field
 
     @task
     def run_linc_calibrator2(field):
-        if (field["status_calibrator2"] == PIPELINE_STATUS.finished) or (
-            field["status_calibrator2"] == PIPELINE_STATUS.running
-        ):
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        if not field["sas_id_calibrator2"]:
+            raise AirflowSkipException("Calibrator 2 does not exist, skipping.")
+        if field["status_calibrator2"] == PIPELINE_STATUS.finished.value:
             print(
                 f"Flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']} already processed."
             )
             return field
         else:
-            print(
-                f"Processing flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']}"
-            )
-            ms_folder = f"L{field['sas_id_calibrator2']}"
-            set_status_processing(
-                field["target_name"], "calibrator2", field["sas_id_target"]
-            )
-            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-            cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} {os.path.join(DATA_DIR, field['target_name'], 'calibrator', ms_folder)}"
-            if not os.path.isdir(outdir):
-                os.mkdir(outdir)
-            print(cmd)
-            with open(
-                f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator2']}.txt",
-                "w+",
-            ) as f_out, open(
-                f"log_LINC_calibrator_{field['target_name']}_{field['sas_id_calibrator2']}_err.txt",
-                "w+",
-            ) as f_err:
-                proc = subprocess.run(
-                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                )
-                success = False
-                pattern = re.compile(r"Workflow.* stopped. Success: True")
-                if not proc.returncode:
-                    f_err.seek(0)
-                    if pattern.search(f_err.read()):
-                        success = True
-                if success:
-                    set_status_finished(
-                        field["target_name"], "calibrator2", field["sas_id_target"]
-                    )
-                else:
-                    raise RuntimeError
+            if CWL_RUNNER_LINC_CALIBRATOR == "cwltool":
+                run_linc_calibrator_cwltool(field, calibrator_field=2, db=CURRENT_DB)
+            elif CWL_RUNNER_LINC_CALIBRATOR == "toil":
+                run_linc_calibrator_toil(field, calibrator_field=2, db=CURRENT_DB)
+            else:
+                raise RuntimeError("Invalid CWL runner specified.")
         return field
 
-    @task(trigger_rule=TriggerRule.ONE_DONE)
+    @task(trigger_rule=TriggerRule.ALL_DONE)
     def select_best_calibrator(result1, result2):
-        if result1["sas_id_calibrator_final"]:
-            return result1
-        elif result2["sas_id_calibrator_final"]:
-            return result2
-        elif result1 and result2:
-            print("Selecting between cal1 and cal2")
-            # Need actual selection logic here
-            set_final_calibrator(
-                result1["target_name"],
-                result1["sas_id_target"],
-                result1["sas_id_calibrator1"],
-            )
-            return result1
-        elif result1 and (not result2):
+        if result1 and (not result2):
             print("Only cal 1 succeeded, continuing with that")
-            set_final_calibrator(
+            CURRENT_DB.set_final_calibrator(
                 result1["target_name"],
                 result1["sas_id_target"],
                 result1["sas_id_calibrator1"],
@@ -361,62 +404,93 @@ def pilot_single_target():
             return result1
         elif (not result1) and result2:
             print("Only cal 2 succeeded, continuing with that")
-            set_final_calibrator(
+            CURRENT_DB.set_final_calibrator(
                 result2["target_name"],
                 result2["sas_id_target"],
                 result2["sas_id_calibrator2"],
             )
             return result2
+        elif result1 and result2:
+            cal_template = pathlib.Path(FLUX_CALIBRATOR_TEMPLATE)
+            if not cal_template.is_file():
+                cal = random.randint(1, 2)
+                print(
+                    f"No flux density calibrator template found. Randomly selected calibrator{cal}"
+                )
+                if cal == 1:
+                    CURRENT_DB.set_final_calibrator(
+                        result1["target_name"],
+                        result1["sas_id_target"],
+                        result1["sas_id_calibrator1"],
+                    )
+                    return result1
+                elif cal == 2:
+                    CURRENT_DB.set_final_calibrator(
+                        result2["target_name"],
+                        result2["sas_id_target"],
+                        result2["sas_id_calibrator2"],
+                    )
+                    return result2
+            else:
+                outdir = os.path.join(OUTPUT_DIR, result1["target_name"])
+                calibrator1_path = get_most_recent_run(
+                    outdir, result1["sas_id_calibrator1"], "LINC_calibrator"
+                )
+                calibrator1_solutions = (
+                    calibrator1_path / "results_LINC_calibrator" / "cal_solutions.h5"
+                )
+
+                calibrator2_path = get_most_recent_run(
+                    outdir, result2["sas_id_calibrator2"], "LINC_calibrator"
+                )
+                calibrator2_solutions = (
+                    calibrator2_path / "results_LINC_calibrator" / "cal_solutions.h5"
+                )
+                assess_cal1 = assess_and_compare(
+                    FLUX_CALIBRATOR_TEMPLATE,
+                    [calibrator1_solutions],
+                )
+                assess_cal2 = assess_and_compare(
+                    FLUX_CALIBRATOR_TEMPLATE,
+                    [calibrator2_solutions],
+                )
+                score1 = assess_cal1[0]["score"]
+                score2 = assess_cal2[0]["score"]
+                print(f"Calibrator 1 score: {score1}")
+                print(f"Calibrator 2 score: {score2}")
+                match score1 <= score2:
+                    case True:
+                        print("Best score for calibrator1")
+                        CURRENT_DB.set_final_calibrator(
+                            result1["target_name"],
+                            result1["sas_id_target"],
+                            result1["sas_id_calibrator1"],
+                        )
+                        return result1
+                    case False:
+                        print("Best score for calibrator2")
+                        CURRENT_DB.set_final_calibrator(
+                            result2["target_name"],
+                            result2["sas_id_target"],
+                            result2["sas_id_calibrator2"],
+                        )
+                        return result2
         else:
             raise AirflowFailException("No calibrators succeeded; stopping processing.")
 
     @task
     def run_linc_target(field):
-        if (field["status_target"] == PIPELINE_STATUS.finished) or (
-            field["status_target"] == PIPELINE_STATUS.running
+        if (field["status_target"] == PIPELINE_STATUS.finished.value) or (
+            field["status_target"] == PIPELINE_STATUS.processing.value
         ):
             return field
         else:
-            print(
-                f"Processing target observation {field['target_name']} {field['sas_id_target']} with calibrator {field['sas_id_calibrator_final']}"
-            )
-            ms_folder = f"L{field['sas_id_target']}"
-            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-            calibrator_path = get_most_recent_run(
-                outdir, field["sas_id_calibrator_final"], "LINC_calibrator"
-            )
-            calibrator_solutions = (
-                calibrator_path / "results_LINC_calibrator" / "cal_solutions.h5"
-            )
-            set_status_processing(
-                field["target_name"], "target", field["sas_id_target"]
-            )
-            cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
-            if not os.path.isdir(outdir):
-                os.mkdir(outdir)
-            print(cmd)
-            with open(
-                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
-                "w+",
-            ) as f_out, open(
-                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                "w+",
-            ) as f_err:
-                proc = subprocess.run(
-                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                )
-                success = False
-                pattern = re.compile(r"Workflow.* stopped. Success: True")
-                if not proc.returncode:
-                    f_err.seek(0)
-                    if pattern.search(f_err.read()):
-                        success = True
-                if success:
-                    set_status_finished(
-                        field["target_name"], "target", field["sas_id_target"]
-                    )
-                else:
-                    raise RuntimeError
+            if CWL_RUNNER_LINC_TARGET == "cwltool":
+                run_linc_target_cwltool(field, CURRENT_DB)
+            elif CWL_RUNNER_LINC_TARGET == "toil":
+                run_linc_target_toil(field, CURRENT_DB)
+            else:
+                raise RuntimeError("Invalid CWL runner specified.")
         return field
 
     @task
@@ -425,150 +499,31 @@ def pilot_single_target():
 
     @task(retries=0, retry_delay=datetime.timedelta(seconds=5))
     def run_vlbi_delay(field):
-        if (field["status_vlbi_delay"] == PIPELINE_STATUS.finished) or (
-            field["status_vlbi_delay"] == PIPELINE_STATUS.running
-        ):
+        if field["status_vlbi_delay"] == PIPELINE_STATUS.finished.value:
             return field
         else:
-            print(
-                f"Processing delay calibration for {field['target_name']} {field['sas_id_target']}"
-            )
-            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-            target_path = get_most_recent_run(
-                outdir, field["sas_id_target"], "LINC_target"
-            )
-            target_ms_path = target_path / "results_LINC_target" / "results"
-            set_status_processing(
-                field["target_name"], "vlbi_delay", field["sas_id_target"]
-            )
-
-            delay_cat = os.path.join(outdir, "delay_calibrators.csv")
-            image_cat = os.path.join(outdir, "image_catalogue.csv")
-
-            proc = subprocess.run(
-                "detect_bad_slurm_nodes.sh",
-                shell=True,
-                text=True,
-                stdout=subprocess.PIPE,
-            )
-            bad_nodes = proc.stdout.strip()
-            if bad_nodes:
-                print(f"Excluding the following bad nodes from scheduling: {bad_nodes}")
-                os.environ["TOIL_SLURM_ARGS"] = f"--exclude={bad_nodes}"
-
-            context = get_current_context()
-            if context["ti"].try_number == 1:
-                cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} {target_ms_path}"
+            if CWL_RUNNER_PILOT_DELAY == "cwltool":
+                run_pilot_delay_cwltool(field, CURRENT_DB)
+            elif CWL_RUNNER_PILOT_DELAY == "toil":
+                run_pilot_delay_toil(field, CURRENT_DB)
             else:
-                # Extract the previous working directory
-                flocs_workdir = ""
-                print(
-                    f"Scanning log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
-                )
-                with open(
-                    f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt"
-                ) as f_out:
-                    for line in f_out.readlines():
-                        print(line)
-                        if "Running workflow with" in line:
-                            flocs_workdir = line.split(" ")[-1].strip()
-                            break
-                if not flocs_workdir:
-                    raise RuntimeError(
-                        "Could not retrieve PILOT workdir. Flocs probably crashed before launching."
-                    )
-                print(f"Resuming failed PILOT run in {flocs_workdir}")
-                cmd = f"flocs-run vlbi delay-calibration --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --ms-suffix dp3concat --delay-calibrator {delay_cat} --image-catalogue {image_cat} {target_ms_path}"
-            if not os.path.isdir(outdir):
-                os.mkdir(outdir)
-            print(cmd)
-            with open(
-                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
-                "w+",
-            ) as f_out, open(
-                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                "w+",
-            ) as f_err:
-                proc = subprocess.run(
-                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                )
-                success = False
-                pattern = re.compile(r"Workflow.* stopped. Success: True")
-                if not proc.returncode:
-                    f_err.seek(0)
-                    if pattern.search(f_err.read()):
-                        success = True
-
-                if success:
-                    set_status_finished(
-                        field["target_name"], "vlbi_delay", field["sas_id_target"]
-                    )
-                else:
-                    raise RuntimeError
-        return field
-
-    @task
-    def run_ddf_subtract(field):
+                raise RuntimeError("Invalid CWL runner specified.")
         return field
 
     @task
     def run_vlbi_ddcal(field):
-        if (field["status_vlbi_dd"] == PIPELINE_STATUS.finished) or (
-            field["status_vlbi_dd"] == PIPELINE_STATUS.running
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        if (field["status_vlbi_dd"] == PIPELINE_STATUS.finished.value) or (
+            field["status_vlbi_dd"] == PIPELINE_STATUS.processing.value
         ):
             return field
         else:
-            print(
-                f"Processing ILT dd calibration for {field['target_name']} {field['sas_id_target']}"
-            )
-            outdir = os.path.join(OUTPUT_DIR, field["target_name"])
-            target_path = get_most_recent_run(
-                outdir, field["sas_id_target"], "LINC_target"
-            )
-            target_ms_path = target_path / "results_LINC_target" / "results"
-            print(f"Using LINC target run: {target_path}")
-
-            sols_path = get_most_recent_run(
-                outdir, field["sas_id_target"], "VLBI_delay"
-            )
-            sols_path = sols_path / "results_VLBI_delay-calibration"
-            sols = list(sols_path.glob("merged*selfcalcycle???_linearfulljones*.h5"))[0]
-            print(f"Using PILOT delay calibration solutions: {sols}")
-
-            source_cat = os.path.join(DATA_DIR, field["target_name"], "vlbi_target.csv")
-            if not os.path.isfile(source_cat):
-                raise AirflowFailException(f"{source_cat} not found.")
-
-            set_status_processing(
-                field["target_name"], "vlbi_dd", field["sas_id_target"]
-            )
-            cmd = f"flocs-run vlbi dd-calibration --runner toil --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --phasediff-score 10.0 --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat {target_ms_path}"
-            if not os.path.isdir(outdir):
-                os.mkdir(outdir)
-            print(cmd)
-            with open(
-                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
-                "w+",
-            ) as f_out, open(
-                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
-                "w+",
-            ) as f_err:
-                proc = subprocess.run(
-                    cmd, shell=True, text=True, stdout=f_out, stderr=f_err
-                )
-                success = False
-                pattern = re.compile(r"Workflow.* stopped. Success: True")
-                if not proc.returncode:
-                    f_err.seek(0)
-                    if pattern.search(f_err.read()):
-                        success = True
-                if success:
-                    set_status_finished(
-                        field["target_name"], "vlbi_dd", field["sas_id_target"]
-                    )
-                    set_field_finished(field["target_name"], field["sas_id_target"])
-                else:
-                    raise RuntimeError
+            if CWL_RUNNER_PILOT_DDCAL == "cwltool":
+                run_pilot_ddcal_cwltool(field, CURRENT_DB)
+            elif CWL_RUNNER_PILOT_DDCAL == "toil":
+                run_pilot_ddcal_toil(field, CURRENT_DB)
+            else:
+                raise RuntimeError("Invalid CWL runner specified.")
         return field
 
     proceed = check_fields()
@@ -580,9 +535,22 @@ def pilot_single_target():
     result_targ = run_linc_target(best_cal)
     linc_is_valid = validate_linc_target(result_targ)
     result_vlbi_delay = run_vlbi_delay(linc_is_valid)
-    result_vlbi_dd = run_vlbi_ddcal(result_vlbi_delay)
 
     proceed >> get_field
+    await_approval_delay = PythonSensor(
+        task_id="approve_delay",
+        python_callable=get_approval,
+        poke_interval=60,
+        timeout=86400 * 7,
+        mode="poke",
+        op_args=[result_vlbi_delay, "vlbi_delay", NEEDS_MANUAL_APPROVAL_DELAY],
+    )
+    result_vlbi_dd = run_vlbi_ddcal(result_vlbi_delay)
+
+    (
+        await_approval_delay
+        >> result_vlbi_dd
+    )
 
 
 pilot_single_target()
