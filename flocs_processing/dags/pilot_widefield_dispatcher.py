@@ -1,3 +1,4 @@
+from datetime import datetime
 import configparser
 import os
 
@@ -52,9 +53,11 @@ def pilot_widefield_dispatcher():
 
     @task
     def launch_field(field):
+        date = datetime.now().isoformat()
         run_id = (
-            f"pilot_widefield_{field['target_name'].replace(' ', '_')}"
-            f"_{field['sas_id_target']}"
+            f"pilot_widefield__{field['target_name'].replace(' ', '_')}"
+            f"__{field['sas_id_target']}"
+            f"__{date}"
         )
         trigger_dag(
             dag_id="pilot_widefield",
