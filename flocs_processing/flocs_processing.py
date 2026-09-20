@@ -79,7 +79,7 @@ def create_database(
 ):
     pipeline_str = ",".join(pipelines)
     pipelines = list(map(str.lower, pipelines))
-    dbstr = f"create table {table_name}(target_name text default NULL, pipelines text default '{pipeline_str}', priority int default 0, status text default {FIELD_STATUS.nothing.value}, downloaded bit default 0"
+    dbstr = f"create table {table_name}(target_name text default NULL, pipelines text default '{pipeline_str}', priority int default 0, status text default '{FIELD_STATUS.nothing.value}', downloaded bit default 0"
 
     if "linc" in pipelines:
         dbstr += f", sas_id_calibrator1 text default NULL, sas_id_calibrator2 text default NULL, sas_id_calibrator_final text default NULL, sas_id_target text primary key default NULL, status_calibrator1 smallint default {PIPELINE_STATUS.nothing.value}, status_calibrator2 smallint default {PIPELINE_STATUS.nothing.value}, status_target smallint default {PIPELINE_STATUS.nothing.value}"
