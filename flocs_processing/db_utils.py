@@ -51,11 +51,11 @@ class FlocsDB:
             columns = "*"
             if obsid:
                 field = cursor.execute(
-                    f"select {columns} from {self.TABLE_NAME} where sas_id_target=='{obsid}' and finished==0 order by priority desc"
+                    f"select {columns} from {self.TABLE_NAME} where sas_id_target=='{obsid}' and status=='not started' order by priority desc"
                 ).fetchall()
             else:
                 field = cursor.execute(
-                    f"select {columns} from {self.TABLE_NAME} where finished==0 order by priority desc"
+                    f"select {columns} from {self.TABLE_NAME} where status=='not started' order by priority desc"
                 ).fetchall()
             print(field)
         return field
