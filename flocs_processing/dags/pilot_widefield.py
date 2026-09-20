@@ -1,5 +1,6 @@
 from enum import Enum
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
+from flocs_processing.flocs_processing import FIELD_STATUS
 from flocs_processing.pipeline_runners import (
     get_most_recent_run,
     run_linc_calibrator_cwltool,
@@ -91,6 +92,7 @@ class STAGING_PROGRESS(Enum):
         else:
             raise NotImplementedError
 
+
 class STAGING_STATUS(Enum):
     success = "success"
     partial_success = "partial success"
@@ -104,6 +106,7 @@ class STAGING_STATUS(Enum):
             return self.value == other.value
         else:
             raise NotImplementedError
+
 
 def get_approval(field, identifier, needs_approval):
     if not needs_approval:
@@ -128,6 +131,9 @@ def pilot_widefield():
         for dbrow in CURRENT_DB.get_db_columns():
             is_processing = False
             row = dict(dbrow)
+            if row["status"] == FIELD_STATUS.downloading.value:
+                is_processing = True
+                break
             status_keys = filter(lambda x: x.startswith("status_"), row.keys())
             for key in status_keys:
                 if row[key] == PIPELINE_STATUS.processing.value:
@@ -155,6 +161,9 @@ def pilot_widefield():
         if field["downloaded"]:
             return field
         else:
+            CURRENT_DB.set_field_downloading(
+                field["target_name"], field["sas_id_target"]
+            )
             stage_calibrators = False
             num_downloaded_calib1 = 0
             num_downloaded_calib2 = 0
@@ -357,6 +366,9 @@ def pilot_widefield():
                             else:
                                 raise RuntimeError
                 if calibrator_downloaded and target_downloaded:
+                    CURRENT_DB.set_field_processing(
+                        field["target_name"], field["sas_id_target"]
+                    )
                     break
                 time.sleep(60)
             return field

@@ -29,19 +29,35 @@ PIPELINES = Literal[
 ]
 
 
-@functools.total_ordering
-class PIPELINE_STATUS(Enum):
-    nothing = 0
-    downloaded = 1
-    finished = 2
-    running = 3
-    processing = 98
-    error = 99
+class FIELD_STATUS(Enum):
+    nothing = "not started"
+    downloading = "downloading"
+    finished = "finished"
+    processing = "processing"
+    failed = "failed"
 
     def __eq__(self, other):
         if self.__class__ is not other.__class__:
             raise NotImplementedError
         return self.value == other.value
+
+
+@functools.total_ordering
+class PIPELINE_STATUS(Enum):
+    nothing = 0
+    downloaded = 1
+    finished = 2
+    await_approval = 3
+    processing = 98
+    error = 99
+
+    def __eq__(self, other):
+        if other.__class__ is int:
+            return self.value == other
+        elif other.__class__ is self.__class__:
+            return self.value == other.value
+        else:
+            raise NotImplementedError
 
     def __lt__(self, other):
         if self.__class__ is not other.__class__:
@@ -63,7 +79,7 @@ def create_database(
 ):
     pipeline_str = ",".join(pipelines)
     pipelines = list(map(str.lower, pipelines))
-    dbstr = f"create table {table_name}(target_name text default NULL, pipelines text default '{pipeline_str}', priority int default 0, finished bit default 0, downloaded bit default 0"
+    dbstr = f"create table {table_name}(target_name text default NULL, pipelines text default '{pipeline_str}', priority int default 0, status text default {FIELD_STATUS.nothing.value}, downloaded bit default 0"
 
     if "linc" in pipelines:
         dbstr += f", sas_id_calibrator1 text default NULL, sas_id_calibrator2 text default NULL, sas_id_calibrator_final text default NULL, sas_id_target text primary key default NULL, status_calibrator1 smallint default {PIPELINE_STATUS.nothing.value}, status_calibrator2 smallint default {PIPELINE_STATUS.nothing.value}, status_target smallint default {PIPELINE_STATUS.nothing.value}"
@@ -82,7 +98,7 @@ def create_database(
     dbstr += ");"
 
     cmd = ["sqlite3", dbname, dbstr]
-    print(f"Creating table via: {" ".join(cmd)}")
+    print(f"Creating table via: {' '.join(cmd)}")
 
     return_code = subprocess.run(cmd)
     if not return_code:
@@ -123,7 +139,7 @@ def add_field(
     dbstr += f"'{sas_id_target}')"
 
     cmd = ["sqlite3", dbname, dbstr]
-    print(f"Adding field {field_name} to {table_name} via: {" ".join(cmd)}")
+    print(f"Adding field {field_name} to {table_name} via: {' '.join(cmd)}")
 
     return_code = subprocess.run(cmd)
     if not return_code:

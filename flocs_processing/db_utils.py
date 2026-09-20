@@ -1,29 +1,6 @@
-from enum import Enum
-import functools
 import sqlite3
 
-
-@functools.total_ordering
-class PIPELINE_STATUS(Enum):
-    nothing = 0
-    downloaded = 1
-    finished = 2
-    await_approval = 3
-    processing = 98
-    error = 99
-
-    def __eq__(self, other):
-        if other.__class__ is int:
-            return self.value == other
-        elif other.__class__ is self.__class__:
-            return self.value == other.value
-        else:
-            raise NotImplementedError
-
-    def __lt__(self, other):
-        if self.__class__ is not other.__class__:
-            raise NotImplementedError
-        return self.value < other.value
+from flocs_processing.flocs_processing import FIELD_STATUS, PIPELINE_STATUS
 
 
 class FlocsDB:
@@ -31,7 +8,7 @@ class FlocsDB:
         self.DATABASE = dbname
         self.TABLE_NAME = db_table
 
-    def get_db_columns(self, obsid: str = None):
+    def get_db_columns(self, obsid: str = ""):
         with sqlite3.connect(self.DATABASE) as db:
             db.row_factory = sqlite3.Row
             cursor = db.cursor()
@@ -46,6 +23,33 @@ class FlocsDB:
                 ).fetchall()
             print(field)
         return field
+
+    def reset_field(self, name, target):
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            cursor.execute(
+                f"update {self.TABLE_NAME} set status={FIELD_STATUS.nothing.value} where target_name=='{name}' and sas_id_target=='{target}'"
+            )
+
+    def set_field_downloading(self, name, target):
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            cursor.execute(
+                f"update {self.TABLE_NAME} set status={FIELD_STATUS.downloading.value} where target_name=='{name}' and sas_id_target=='{target}'"
+            )
+
+    def set_field_processing(self, name, target):
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            cursor.execute(
+                f"update {self.TABLE_NAME} set status={FIELD_STATUS.processing.value} where target_name=='{name}' and sas_id_target=='{target}'"
+            )
+
+    def set_field_finished(self, name, target):
+        query = f"update {self.TABLE_NAME} set status={FIELD_STATUS.processing.value} where target_name=='{name}' and sas_id_target=='{target}'"
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            cursor.execute(query)
 
     def set_status_nothing(self, name, identifier, target):
         with sqlite3.connect(self.DATABASE) as db:
@@ -88,12 +92,6 @@ class FlocsDB:
             cursor.execute(
                 f"update {self.TABLE_NAME} set downloaded=1 where target_name=='{name}' and sas_id_target=='{target}'"
             )
-
-    def set_field_finished(self, name, target):
-        query = f"update {self.TABLE_NAME} set finished=1 where target_name=='{name}' and sas_id_target=='{target}'"
-        with sqlite3.connect(self.DATABASE) as db:
-            cursor = db.cursor()
-            cursor.execute(query)
 
     def set_final_calibrator(self, name, target, final_cal):
         with sqlite3.connect(self.DATABASE) as db:
