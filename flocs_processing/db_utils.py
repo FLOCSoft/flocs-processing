@@ -1,6 +1,42 @@
+from enum import Enum
+import functools
 import sqlite3
 
-from flocs_processing.flocs_processing import FIELD_STATUS, PIPELINE_STATUS
+
+class FIELD_STATUS(Enum):
+    nothing = "not started"
+    downloading = "downloading"
+    finished = "finished"
+    processing = "processing"
+    failed = "failed"
+
+    def __eq__(self, other):
+        if self.__class__ is not other.__class__:
+            raise NotImplementedError
+        return self.value == other.value
+
+
+@functools.total_ordering
+class PIPELINE_STATUS(Enum):
+    nothing = 0
+    downloaded = 1
+    finished = 2
+    await_approval = 3
+    processing = 98
+    error = 99
+
+    def __eq__(self, other):
+        if other.__class__ is int:
+            return self.value == other
+        elif other.__class__ is self.__class__:
+            return self.value == other.value
+        else:
+            raise NotImplementedError
+
+    def __lt__(self, other):
+        if self.__class__ is not other.__class__:
+            raise NotImplementedError
+        return self.value < other.value
 
 
 class FlocsDB:
