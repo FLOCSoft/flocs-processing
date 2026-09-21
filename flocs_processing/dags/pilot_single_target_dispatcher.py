@@ -2,10 +2,9 @@ from datetime import datetime
 import configparser
 import os
 
-from airflow.api.common.trigger_dag import trigger_dag
+from airflow.providers.common.compat.sdk import DagRunTriggerException
 from airflow.sdk import dag, task
 from airflow.sdk.exceptions import AirflowSkipException
-from airflow.utils.types import DagRunTriggeredByType
 
 from flocs_processing.db_utils import FlocsDB
 from flocs_processing.flocs_processing import FIELD_STATUS, PIPELINE_STATUS
@@ -31,7 +30,7 @@ CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
 
 
 @dag(schedule="@continuous", max_active_runs=1, catchup=False)
-def pilot_widefield_dispatcher():
+def pilot_single_target_dispatcher():
     @task.short_circuit
     def check_fields():
         return bool(CURRENT_DB.get_db_columns())
@@ -55,20 +54,26 @@ def pilot_widefield_dispatcher():
     def launch_field(field):
         date = datetime.now().isoformat()
         run_id = (
-            f"pilot_widefield__{field['target_name'].replace(' ', '_')}"
+            f"pilot__single_target__{field['target_name'].replace(' ', '_')}"
             f"__{field['sas_id_target']}"
             f"__{date}"
         )
-        trigger_dag(
-            dag_id="pilot_widefield",
-            triggered_by=DagRunTriggeredByType.OPERATOR,
-            run_id=run_id,
+        raise DagRunTriggerException(
+            trigger_dag_id="pilot_single_target",
+            dag_run_id=run_id,
             conf={
                 "target_name": field["target_name"],
                 "sas_id_target": field["sas_id_target"],
             },
+            logical_date=None,
+            reset_dag_run=False,
+            skip_when_already_exists=False,
+            wait_for_completion=True,
+            allowed_states=["success"],
+            failed_states=["failed"],
+            poke_interval=60,
+            deferrable=False,
         )
-        return run_id
 
     proceed = check_fields()
     field = get_unprocessed_field()
@@ -77,4 +82,4 @@ def pilot_widefield_dispatcher():
     proceed >> field >> run_id
 
 
-pilot_widefield_dispatcher()
+pilot_single_target_dispatcher()

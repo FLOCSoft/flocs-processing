@@ -107,6 +107,9 @@ class FlocsDB:
             cursor.execute(
                 f"update {self.TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.processing.value} where target_name=='{name}' and sas_id_target=='{target}'"
             )
+            cursor.execute(
+                f"update {self.TABLE_NAME} set status={FIELD_STATUS.processing.value} where target_name=='{name}' and sas_id_target=='{target}'"
+            )
 
     def set_status_await_approval(self, name, identifier, target):
         with sqlite3.connect(self.DATABASE) as db:
