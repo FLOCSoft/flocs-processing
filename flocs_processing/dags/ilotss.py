@@ -124,7 +124,7 @@ def get_approval(field, identifier, needs_approval):
 
 
 @dag(max_active_runs=4)
-def pilot_widefield():
+def ilotss():
     @task
     def get_unprocessed_target():
         field = None
@@ -728,4 +728,4 @@ def pilot_widefield():
     )
 
 
-pilot_widefield()
+ilotss()
