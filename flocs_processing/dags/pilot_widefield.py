@@ -600,9 +600,9 @@ def pilot_widefield():
             return field
         else:
             if CWL_RUNNER_PILOT_DDCAL == "cwltool":
-                run_pilot_ddcal_cwltool(field, CURRENT_DB)
+                run_pilot_ddcal_cwltool(field, CURRENT_DB, mode="widefield")
             elif CWL_RUNNER_PILOT_DDCAL == "toil":
-                run_pilot_ddcal_toil(field, CURRENT_DB)
+                run_pilot_ddcal_toil(field, CURRENT_DB, mode="widefield")
             else:
                 raise RuntimeError("Invalid CWL runner specified.")
         return field
