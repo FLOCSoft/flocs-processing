@@ -556,7 +556,7 @@ def run_pilot_delay_toil(field, db: FlocsDB):
             raise RuntimeError
 
 
-def run_pilot_ddcal_cwltool(field, db: FlocsDB):
+def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
     print(
         f"Processing ILT dd calibration for {field['target_name']} {field['sas_id_target']}"
     )
@@ -584,7 +584,10 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB):
         db.set_status_processing(
             field["target_name"], "vlbi_dd", field["sas_id_target"]
         )
-        cmd = f"flocs-run vlbi dd-calibration --runner cwltool --scheduler slurm --slurm-cores 32 --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --phasediff-score 10.0 --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat {target_ms_path}"
+        if mode == "widefield":
+            cmd = f"flocs-run vlbi dd-calibration --runner cwltool --scheduler slurm --slurm-cores 32 --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat {target_ms_path}"
+        elif mode == "single_target":
+            cmd = f"flocs-run vlbi dd-calibration --runner cwltool --scheduler slurm --slurm-cores 32 --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --max-rejected-fraction 1.0 --phasediff-score 10.0 --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat {target_ms_path}"
     else:
         print("Widefield imaging run, checking subtraction output.")
         target_path = get_most_recent_run(
