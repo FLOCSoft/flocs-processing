@@ -87,6 +87,12 @@ class FlocsDB:
             cursor = db.cursor()
             cursor.execute(query)
 
+    def set_field_failed(self, name, target):
+        query = f"update {self.TABLE_NAME} set status='{FIELD_STATUS.failed.value}' where target_name=='{name}' and sas_id_target=='{target}'"
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            cursor.execute(query)
+
     def set_status_nothing(self, name, identifier, target):
         with sqlite3.connect(self.DATABASE) as db:
             cursor = db.cursor()
@@ -125,7 +131,14 @@ class FlocsDB:
                 f"update {self.TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.finished.value} where target_name=='{name}' and sas_id_target=='{target}'"
             )
 
-    def set_status_downloaded(self, name, target):
+    def set_status_downloaded(self, name, identifier, target):
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            cursor.execute(
+                f"update {self.TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.downloaded.value} where target_name=='{name}' and sas_id_target=='{target}'"
+            )
+
+    def set_field_downloaded(self, name, target):
         with sqlite3.connect(self.DATABASE) as db:
             cursor = db.cursor()
             cursor.execute(
