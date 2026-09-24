@@ -84,6 +84,7 @@ class STAGING_PROGRESS(Enum):
         else:
             raise NotImplementedError
 
+
 class STAGING_STATUS(Enum):
     success = "success"
     partial_success = "partial success"
@@ -97,6 +98,7 @@ class STAGING_STATUS(Enum):
             return self.value == other.value
         else:
             raise NotImplementedError
+
 
 def get_approval(field, identifier, needs_approval):
     if not needs_approval:
@@ -393,15 +395,28 @@ def pilot_single_target():
         return field
 
     @task(trigger_rule=TriggerRule.ALL_DONE)
-    def select_best_calibrator(result1, result2):
+    def select_best_calibrator(field, result1, result2):
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        # Just in case we are out of sync with the database (could happen on e.g. manually marking success).
+        result1 = field if field["sas_id_calibrator1"] is not None else None
+        result2 = field if field["sas_id_calibrator2"] is not None else None
+        if (not result1) and (not result2):
+            raise AirflowFailException("No successful calibrators")
+
         if result1 and (not result2):
             print("Only cal 1 succeeded, continuing with that")
-            CURRENT_DB.set_final_calibrator(
-                result1["target_name"],
-                result1["sas_id_target"],
-                result1["sas_id_calibrator1"],
-            )
-            return result1
+            print(f"Status: {result1['status_calibrator1']}")
+            print(result1)
+            print(field)
+            if result1["status_calibrator1"] == PIPELINE_STATUS.finished.value:
+                CURRENT_DB.set_final_calibrator(
+                    result1["target_name"],
+                    result1["sas_id_target"],
+                    result1["sas_id_calibrator1"],
+                )
+                return result1
+            else:
+                raise AirflowFailException("Calibrator 1 failed.")
         elif (not result1) and result2:
             print("Only cal 2 succeeded, continuing with that")
             CURRENT_DB.set_final_calibrator(
@@ -480,6 +495,7 @@ def pilot_single_target():
 
     @task
     def run_linc_target(field):
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if (field["status_target"] == PIPELINE_STATUS.finished.value) or (
             field["status_target"] == PIPELINE_STATUS.processing.value
         ):
@@ -499,6 +515,7 @@ def pilot_single_target():
 
     @task(retries=0, retry_delay=datetime.timedelta(seconds=5))
     def run_vlbi_delay(field):
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if field["status_vlbi_delay"] == PIPELINE_STATUS.finished.value:
             return field
         else:
@@ -531,7 +548,7 @@ def pilot_single_target():
     field = download_field(get_field)
     result_cal1 = run_linc_calibrator1(field)
     result_cal2 = run_linc_calibrator2(field)
-    best_cal = select_best_calibrator(result_cal1, result_cal2)
+    best_cal = select_best_calibrator(field, result_cal1, result_cal2)
     result_targ = run_linc_target(best_cal)
     linc_is_valid = validate_linc_target(result_targ)
     result_vlbi_delay = run_vlbi_delay(linc_is_valid)
@@ -547,10 +564,7 @@ def pilot_single_target():
     )
     result_vlbi_dd = run_vlbi_ddcal(result_vlbi_delay)
 
-    (
-        await_approval_delay
-        >> result_vlbi_dd
-    )
+    (await_approval_delay >> result_vlbi_dd)
 
 
 pilot_single_target()
