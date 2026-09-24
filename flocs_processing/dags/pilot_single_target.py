@@ -405,9 +405,6 @@ def pilot_single_target():
 
         if result1 and (not result2):
             print("Only cal 1 succeeded, continuing with that")
-            print(f"Status: {result1['status_calibrator1']}")
-            print(result1)
-            print(field)
             if result1["status_calibrator1"] == PIPELINE_STATUS.finished.value:
                 CURRENT_DB.set_final_calibrator(
                     result1["target_name"],
