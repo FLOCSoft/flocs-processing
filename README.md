@@ -2,7 +2,7 @@
 
 This package aims to provide relatively simple end-to-end automatic processing of ILT HBA data. Where `flocs-runners` provides the interface to running pipelines, `flocs-processing` is the scaffolding to tie it together. Data reduction is coordinated via a dedicated SQLite database that holds information on which observations to process, which pipelines to run for them and all of the related statuses. Orchestration of all the pipelines is handled via Airflow through a DAG.
 
-The autoPILOT package (https://github.com/LOFAR-VLBI/autoPILOT) needs to be on PYTHONPATH to enable the automatic calibrator assessment.
+The autoPILOT package (https://github.com/LOFAR-VLBI/autoPILOT) needs to be on installed to enable the automatic calibrator assessment.
 
 ## Folder setup
 Flocs-processing requires three folders to be setup:
@@ -14,10 +14,16 @@ Flocs-processing requires three folders to be setup:
 The expected naming directory structure for input data is `<data folder>/<field name>/{calibrator,target}`. Inside the calibrator and target folders, the observations should follow the usual `LXXXXXX` naming scheme. These **must** match the SAS IDs in the database for flocs to be able to find them.
 
 ## Database setup
-A database for processing is created via `flocs-processing create-database`. This will create an empty database with the necessary columns. Datasets to process can be added via `flocs-processing add-field`.
+A database for processing is created via `flocs-processing create-database`. This will create an empty database with the necessary columns. Datasets to process can be added via `flocs-processing add-field` or existing fields manipulated via `flocs-processing update-field-status` or `flocs-processing update-pipeline-status`.
 
 ## Processing data
-To start processing data, Airflow needs to be running. This will be delegated to `flocs-processing process-from-database` in the future, but for now requires running Airflow manually. For setup do the following:
+### Automatic setup via flocs
+To start processing data, Airflow needs to be running. This can be setup automatically via `flocs-processing deploy-airflow`. See its help for options.
+
+All that is left is to put the relevant dags in `<your airflow folder>/dags`. As a user you can trigger the DAGs manually, or use the dispatcher DAGs which will start processing automatically. On the "Dags" tab of the web UI you should now see the DAGs available if everything went well. To manually trigger one, click on the name and on the subsequent page use the "Trigger" button in the top right. This is not needed for the dispatchers.
+
+### Manual setup
+For manual setup of the Airflow part do the following:
 
 1. Install airflow: `uv pip install apache-airflow`
 2. Set up a folder that wil contain all of Airflow's own stuff and assign it to the `AIRFLOW_HOME` environment variable.
@@ -64,6 +70,4 @@ tmux new-session -d -s airflow-scheduler "bash -c 'source $HOME/source_airflow.s
 ```
 
 This should start four tmux sessions with these services running in the background. The credentials to log into e.g. the web interface will be stored in `${AIRFLOW_HOME}/simple_auth_manager_passwords.json.generated`. The Airflow instance will start on port 8080. You can access it via `localhost:8080` in your browser. If it is running on a remote cluster, you can set up a tunnel via e.g. `ssh -N -L 8080:localhost:8080 <remote>` to forward it to your local machine.
-
-Once `flocs-processing` is complete the processing loop will be automatic, but for now the user must trigger the DAG manually. On the "Dags" tab you should now see the flocs DAGs available. To manually trigger one, click on the name and on the subsequent page use the "Trigger" button in the top right.
 
