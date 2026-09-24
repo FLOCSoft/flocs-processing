@@ -51,7 +51,7 @@ class FlocsDB:
             columns = "*"
             if obsid:
                 field = cursor.execute(
-                    f"select {columns} from {self.TABLE_NAME} where sas_id_target=='{obsid}' and status=='not started' order by priority desc"
+                    f"select {columns} from {self.TABLE_NAME} where sas_id_target=='{obsid}' order by priority desc"
                 ).fetchall()
             else:
                 field = cursor.execute(
@@ -64,25 +64,31 @@ class FlocsDB:
         with sqlite3.connect(self.DATABASE) as db:
             cursor = db.cursor()
             cursor.execute(
-                f"update {self.TABLE_NAME} set status={FIELD_STATUS.nothing.value} where target_name=='{name}' and sas_id_target=='{target}'"
+                f"update {self.TABLE_NAME} set status='{FIELD_STATUS.nothing.value}' where target_name=='{name}' and sas_id_target=='{target}'"
             )
 
     def set_field_downloading(self, name, target):
         with sqlite3.connect(self.DATABASE) as db:
             cursor = db.cursor()
             cursor.execute(
-                f"update {self.TABLE_NAME} set status={FIELD_STATUS.downloading.value} where target_name=='{name}' and sas_id_target=='{target}'"
+                f"update {self.TABLE_NAME} set status='{FIELD_STATUS.downloading.value}' where target_name=='{name}' and sas_id_target=='{target}'"
             )
 
     def set_field_processing(self, name, target):
         with sqlite3.connect(self.DATABASE) as db:
             cursor = db.cursor()
             cursor.execute(
-                f"update {self.TABLE_NAME} set status={FIELD_STATUS.processing.value} where target_name=='{name}' and sas_id_target=='{target}'"
+                f"update {self.TABLE_NAME} set status='{FIELD_STATUS.processing.value}' where target_name=='{name}' and sas_id_target=='{target}'"
             )
 
     def set_field_finished(self, name, target):
-        query = f"update {self.TABLE_NAME} set status={FIELD_STATUS.processing.value} where target_name=='{name}' and sas_id_target=='{target}'"
+        query = f"update {self.TABLE_NAME} set status='{FIELD_STATUS.processing.value}' where target_name=='{name}' and sas_id_target=='{target}'"
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            cursor.execute(query)
+
+    def set_field_failed(self, name, target):
+        query = f"update {self.TABLE_NAME} set status='{FIELD_STATUS.failed.value}' where target_name=='{name}' and sas_id_target=='{target}'"
         with sqlite3.connect(self.DATABASE) as db:
             cursor = db.cursor()
             cursor.execute(query)
@@ -107,6 +113,9 @@ class FlocsDB:
             cursor.execute(
                 f"update {self.TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.processing.value} where target_name=='{name}' and sas_id_target=='{target}'"
             )
+            cursor.execute(
+                f"update {self.TABLE_NAME} set status='{FIELD_STATUS.processing.value}' where target_name=='{name}' and sas_id_target=='{target}'"
+            )
 
     def set_status_await_approval(self, name, identifier, target):
         with sqlite3.connect(self.DATABASE) as db:
@@ -122,7 +131,14 @@ class FlocsDB:
                 f"update {self.TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.finished.value} where target_name=='{name}' and sas_id_target=='{target}'"
             )
 
-    def set_status_downloaded(self, name, target):
+    def set_status_downloaded(self, name, identifier, target):
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            cursor.execute(
+                f"update {self.TABLE_NAME} set status_{identifier}={PIPELINE_STATUS.downloaded.value} where target_name=='{name}' and sas_id_target=='{target}'"
+            )
+
+    def set_field_downloaded(self, name, target):
         with sqlite3.connect(self.DATABASE) as db:
             cursor = db.cursor()
             cursor.execute(

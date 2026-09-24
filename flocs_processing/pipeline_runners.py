@@ -273,14 +273,34 @@ def run_linc_target_toil(field, db: FlocsDB):
         calibrator_path / "results_LINC_calibrator" / "cal_solutions.h5"
     )
     db.set_status_processing(field["target_name"], "target", field["sas_id_target"])
-    cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
+    context = get_current_context()
+    log_path = os.path.join(
+        logsdir,
+        f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
+    )
+    if context["ti"].try_number == 1 or not os.path.isfile(log_path):
+        cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
+    else:
+        flocs_workdir = ""
+        print(
+            f"Scanning log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
+        )
+        with open(log_path) as f_out:
+            for line in f_out.readlines():
+                print(line)
+                if "Running workflow with" in line:
+                    flocs_workdir = line.split(" ")[-1].strip()
+                    break
+        if not flocs_workdir:
+            raise RuntimeError(
+                "Could not retrieve LINC target workdir. Flocs probably crashed before launching."
+            )
+        print(f"Resuming failed LINC target run in {flocs_workdir}")
+        cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
     print(cmd)
     with (
         open(
-            os.path.join(
-                logsdir,
-                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
-            ),
+            log_path,
             "w+",
         ) as f_out,
         open(

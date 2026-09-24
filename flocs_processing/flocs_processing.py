@@ -147,8 +147,41 @@ def add_field(
 
 
 @app.command()
-def update_field(
-    field_name: Annotated[str, Parameter(help="Name of the source/field to add.")],
+def update_field_status(
+    field_name: Annotated[str, Parameter(help="Name of the source/field to update.")],
+    sas_id_target: Annotated[
+        str,
+        Parameter(help="SAS ID of the target to add.", consume_multiple=True),
+    ],
+    dbname: Annotated[
+        str, Parameter(help="Sqlite3 database from which processing will be done.")
+    ],
+    set_status: Annotated[
+        Literal["not started", "downloaded", "processing", "failed", "finished"],
+        Parameter(help="Set the status of the given pipeline."),
+    ],
+    table_name: Annotated[
+        str, Parameter(help="Database table that will be processed.")
+    ] = "processing_flocs",
+):
+    db = FlocsDB(dbname=dbname, db_table=table_name)
+    logger.info(f"Setting field {field_name} to status {set_status}")
+    match set_status:
+        case "not started":
+            db.reset_field(field_name, sas_id_target)
+        case "downloaded":
+            db.set_field_downloaded(field_name, sas_id_target)
+        case "processing":
+            db.set_field_processing(field_name, sas_id_target)
+        case "failed":
+            db.set_field_failed(field_name, sas_id_target)
+        case "finished":
+            db.set_field_finished(field_name, sas_id_target)
+
+
+@app.command()
+def update_pipeline_status(
+    field_name: Annotated[str, Parameter(help="Name of the source/field to update.")],
     sas_id_target: Annotated[
         str,
         Parameter(help="SAS ID of the target to add.", consume_multiple=True),
@@ -178,7 +211,7 @@ def update_field(
                 case "nothing":
                     db.set_status_nothing(field_name, p, sas_id_target)
                 case "downloaded":
-                    db.set_status_downloaded(field_name, sas_id_target)
+                    db.set_status_downloaded(field_name, p, sas_id_target)
                 case "processing":
                     db.set_status_processing(field_name, p, sas_id_target)
                 case "failed":
@@ -191,7 +224,7 @@ def update_field(
             case "nothing":
                 db.set_status_nothing(field_name, pipeline, sas_id_target)
             case "downloaded":
-                db.set_status_downloaded(field_name, sas_id_target)
+                db.set_status_downloaded(field_name, pipeline, sas_id_target)
             case "processing":
                 db.set_status_processing(field_name, pipeline, sas_id_target)
             case "failed":
