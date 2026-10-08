@@ -296,7 +296,7 @@ def run_linc_target_toil(field, db: FlocsDB):
                 "Could not retrieve LINC target workdir. Flocs probably crashed before launching."
             )
         print(f"Resuming failed LINC target run in {flocs_workdir}")
-        cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
+        cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --output-fullres-data --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
     print(cmd)
     with (
         open(
