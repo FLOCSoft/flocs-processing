@@ -522,9 +522,9 @@ def ilotss():
             return field
         else:
             if CWL_RUNNER_PILOT_DELAY == "cwltool":
-                run_pilot_delay_cwltool(field, CURRENT_DB)
+                run_pilot_delay_cwltool(field, CURRENT_DB, mode="widefield")
             elif CWL_RUNNER_PILOT_DELAY == "toil":
-                run_pilot_delay_toil(field, CURRENT_DB)
+                run_pilot_delay_toil(field, CURRENT_DB, mode="widefield")
             else:
                 raise RuntimeError("Invalid CWL runner specified.")
         return field

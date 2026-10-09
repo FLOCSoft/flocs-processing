@@ -517,9 +517,9 @@ def pilot_single_target():
             return field
         else:
             if CWL_RUNNER_PILOT_DELAY == "cwltool":
-                run_pilot_delay_cwltool(field, CURRENT_DB)
+                run_pilot_delay_cwltool(field, CURRENT_DB, mode="single_target")
             elif CWL_RUNNER_PILOT_DELAY == "toil":
-                run_pilot_delay_toil(field, CURRENT_DB)
+                run_pilot_delay_toil(field, CURRENT_DB, mode="single_target")
             else:
                 raise RuntimeError("Invalid CWL runner specified.")
         return field
