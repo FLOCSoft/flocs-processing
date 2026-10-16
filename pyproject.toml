@@ -7,10 +7,10 @@ name = "flocs-processing"
 version = "0.0.0"
 description = ""
 requires-python = ">=3.10"
-dependencies = ["cyclopts", "structlog", "packaging"]
+dependencies = ["cyclopts", "structlog", "packaging", "prefect>=3,<4"]
 
 [project.scripts]
 flocs-processing = "flocs_processing.flocs_processing:main"
 
 [tool.setuptools]
-packages = ["flocs_processing"]
+packages = ["flocs_processing", "flocs_processing.flows"]

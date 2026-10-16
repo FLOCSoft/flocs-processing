@@ -1,73 +1,55 @@
 # End-to-end processing of ILT HBA data with flocs
 
-This package aims to provide relatively simple end-to-end automatic processing of ILT HBA data. Where `flocs-runners` provides the interface to running pipelines, `flocs-processing` is the scaffolding to tie it together. Data reduction is coordinated via a dedicated SQLite database that holds information on which observations to process, which pipelines to run for them and all of the related statuses. Orchestration of all the pipelines is handled via Airflow through a DAG.
+`flocs-processing` coordinates LOFAR processing pipelines using a SQLite database and Prefect flows. The `flocs-runners` package provides the pipeline execution interface.
 
-The autoPILOT package (https://github.com/LOFAR-VLBI/autoPILOT) needs to be on installed to enable the automatic calibrator assessment.
+The autoPILOT package (https://github.com/LOFAR-VLBI/autoPILOT) is required for automatic calibrator assessment.
 
 ## Folder setup
-Flocs-processing requires three folders to be setup:
 
-* A processing folder -- this is where data is stored while processing
-* A data folder -- this is where the input data is found
-* An output folder -- this is where finished pipeline outputs are copied to, and searched for in steps that depend on it.
+Flocs-processing uses three folders:
 
-The expected naming directory structure for input data is `<data folder>/<field name>/{calibrator,target}`. Inside the calibrator and target folders, the observations should follow the usual `LXXXXXX` naming scheme. These **must** match the SAS IDs in the database for flocs to be able to find them.
+* A processing folder for intermediate data.
+* A data folder containing input data.
+* An output folder containing pipeline outputs used by later steps.
+
+Input data is expected under `<data folder>/<field name>/{calibrator,target}`. Observation directories use the `LXXXXXX` naming scheme and must match SAS IDs in the database.
 
 ## Database setup
-A database for processing is created via `flocs-processing create-database`. This will create an empty database with the necessary columns. Datasets to process can be added via `flocs-processing add-field` or existing fields manipulated via `flocs-processing update-field-status` or `flocs-processing update-pipeline-status`.
 
-## Processing data
-### Automatic setup via flocs
-To start processing data, Airflow needs to be running. This can be setup automatically via `flocs-processing deploy-airflow`. See its help for options.
+Create a database with `flocs-processing create-database`. Add observations with `flocs-processing add-field`; update field and pipeline status with `flocs-processing update-field-status` and `flocs-processing update-pipeline-status`.
 
-All that is left is to put the relevant dags in `<your airflow folder>/dags`. As a user you can trigger the DAGs manually, or use the dispatcher DAGs which will start processing automatically. On the "Dags" tab of the web UI you should now see the DAGs available if everything went well. To manually trigger one, click on the name and on the subsequent page use the "Trigger" button in the top right. This is not needed for the dispatchers.
+## Prefect setup and deployments
 
-### Manual setup
-For manual setup of the Airflow part do the following:
+Install the package and Prefect in the environment used by the Prefect worker. Configure the processing settings file using `FLOCS_CONFIG`; if unset, `~/.flocs.cfg` is used. The file contains the database path, table name, scheduler settings, and processing/data/output paths.
 
-1. Install airflow: `uv pip install apache-airflow`
-2. Set up a folder that wil contain all of Airflow's own stuff and assign it to the `AIRFLOW_HOME` environment variable.
-3. Run `airflow config list --defaults > "${AIRFLOW_HOME}/airflow.cfg"`
-4. Define `AIRFLOW__CORE__DAGS_FOLDER` as `${AIRFLOW_HOME}/dags` and create the folder. Copy the DAGs inside `flocs_processing/dags` to this folder.
-5. Define `AIRFLOW__CORE__LOAD_EXAMPLES` as `False`
+Point the Prefect CLI at your Prefect server and select a work pool:
 
-Finally, define the following airflow variables:
-
-```
-export AIRFLOW_HOME=/path/to/some/folder/for/airflow
-export AIRFLOW__CORE__DAGS_FOLDER=$AIRFLOW_HOME/dags
-export AIRFLOW__CORE__LOAD_EXAMPLES=False
-export AIRFLOW__CORE__PARALLELISM=32
-export AIRFLOW__LOGGING__DAG_PROCESSOR_CHILD_PROCESS_LOG_DIRECTORY=$AIRFLOW_HOME/logs/dag_processor
-export AIRFLOW__CORE__PLUGINS_FOLDER=$AIRFLOW_HOME/plugins
-export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="sqlite:///$AIRFLOW_HOME/airflow.db"
-export AIRFLOW__LOGGING__BASE_LOG_FOLDER=$AIRFLOW_HOME/logs
+```bash
+export PREFECT_API_URL=http://<prefect-server>:4200/api
+export FLOCS_CONFIG=/path/to/flocs.cfg
+prefect work-pool ls
 ```
 
-For a small test, you can run `airflow standalone` to start the Airflow instance for a small test.  For proper deployment, it is recommended by the Airflow docs to not use `standalone`. First we'll set up a persistent JWT secret for authentication purpose.
+Edit `prefect.yaml` to set the work pool for your environment. It defines deployments for the processing flows and the two dispatchers. Dispatchers are scheduled every minute and process one observation at a time. The worker must have access to the project source, configuration file, SQLite database, input/output directories, and pipeline executables. For a process work pool, start a worker with:
 
-```
-mkdir -p "$HOME/.config/airflow"
-chmod 700 "$HOME/.config/airflow"
-openssl rand -hex 32 > "$HOME/.config/airflow/jwt_secret"
-chmod 600 "$HOME/.config/airflow/jwt_secret"
-export AIRFLOW__API_AUTH__JWT_SECRET="$(cat "$HOME/.config/airflow/jwt_secret")"
+```bash
+prefect worker start --pool <work-pool-name>
 ```
 
-Next, initialise Airflow's own database with
+Register all deployments from the project root:
 
-```
-airflow db migrate
-```
-
-Finally, to start the necessary Airflow services, execute them like follows:
-
-```
-tmux new-session -d -s airflow-api-server "bash -c 'source $HOME/source_airflow.sh && airflow api-server; exec bash'"
-tmux new-session -d -s airflow-triggerer "bash -c 'source $HOME/source_airflow.sh && airflow triggerer; exec bash'"
-tmux new-session -d -s airflow-dag-processor "bash -c 'source $HOME/source_airflow.sh && airflow dag-processor; exec bash'"
-tmux new-session -d -s airflow-scheduler "bash -c 'source $HOME/source_airflow.sh && airflow scheduler; exec bash'"
+```bash
+flocs-processing deploy-prefect
 ```
 
-This should start four tmux sessions with these services running in the background. The credentials to log into e.g. the web interface will be stored in `${AIRFLOW_HOME}/simple_auth_manager_passwords.json.generated`. The Airflow instance will start on port 8080. You can access it via `localhost:8080` in your browser. If it is running on a remote cluster, you can set up a tunnel via e.g. `ssh -N -L 8080:localhost:8080 <remote>` to forward it to your local machine.
+To register one deployment only, pass its deployment name:
 
+```bash
+flocs-processing deploy-prefect --deployment pilot-single-target-dispatcher
+```
+
+The dispatchers start and wait for their corresponding processing deployments. Ensure the `pilot_single_target` and `ilotss` deployments are registered before enabling dispatcher schedules. Deployments can also be triggered manually from the Prefect UI or with `prefect deployment run <flow-name>/<deployment-name>`.
+
+## Local Prefect server
+
+For development, start a local server with `prefect server start`. Set `PREFECT_API_URL` to the API URL printed by Prefect, register deployments, and start a worker for the selected pool. Production server and worker setup should follow the Prefect deployment guidance for the chosen infrastructure and work-pool type.

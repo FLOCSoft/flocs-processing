@@ -1,6 +1,7 @@
 from enum import Enum
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
-from flocs_processing.flocs_processing import FIELD_STATUS
+from flocs_processing.db_utils import FIELD_STATUS
+from flocs_processing.config import load_config
 from flocs_processing.pipeline_runners import (
     get_most_recent_run,
     run_linc_calibrator_cwltool,
@@ -20,37 +21,19 @@ from flocs_processing.pipeline_runners import (
     launch_ddf_pipeline,
 )
 
-import configparser
 import datetime
 import os
 import pathlib
 import random
-import sqlite3
 import subprocess
 import time
 
-from airflow.exceptions import AirflowFailException
-from airflow.sdk import dag, task
-from airflow.providers.standard.sensors.python import PythonSensor
-from airflow.sdk.exceptions import AirflowSkipException
-from airflow.task.trigger_rule import TriggerRule
+from prefect import flow, task
 from flocs_lta.lta_search import ObservationStager
 from autoPILOT.ilotss.assess_calibrators import assess_and_compare
 from stager_access import get_surls_requested, get_surls_online, reschedule, get_status
 
-if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
-    raise RuntimeError(
-        "FLOCS_AIRFLOW_CONFIG environment variable not set. Please point this to a valid configuration file."
-    )
-
-CONFIG_FILE: str = os.getenv("FLOCS_AIRFLOW_CONFIG") or ""
-if not os.path.isfile(CONFIG_FILE):
-    raise RuntimeError(f"{CONFIG_FILE} is not a valid file")
-
-parser = configparser.ConfigParser()
-parser.optionxform = str  # ty: ignore[invalid-assignment]
-with open(CONFIG_FILE, "r") as config:
-    parser.read_string("[DEFAULT]\n" + config.read())
+parser = load_config()
 
 print("Config summary:")
 for k, v in parser["DEFAULT"].items():
@@ -108,29 +91,31 @@ class STAGING_STATUS(Enum):
             raise NotImplementedError
 
 
-def get_approval(field, identifier, needs_approval):
+def wait_for_approval(field, identifier, needs_approval, timeout=86400 * 7):
     if not needs_approval:
         return field
-    with sqlite3.connect(DATABASE) as db:
-        db.row_factory = sqlite3.Row
-        cursor = db.cursor()
-        columns = f"sas_id_target,status_{identifier}"
-        field = cursor.execute(
-            f"select {columns} from {TABLE_NAME} where sas_id_target=='{field['sas_id_target']}'"
-        ).fetchall()
-        status = field[0][f"status_{identifier}"]
-    if status == PIPELINE_STATUS.finished.value:
-        return field
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        rows = CURRENT_DB.get_db_columns(field["sas_id_target"], intent="widefield")
+        if rows and rows[0][f"status_{identifier}"] == PIPELINE_STATUS.finished.value:
+            return dict(rows[0])
+        time.sleep(60)
+    raise TimeoutError(f"Approval for {identifier} was not received within {timeout} seconds.")
 
 
-@dag(max_active_runs=4)
-def ilotss():
+@flow
+def ilotss(target_name: str | None = None, sas_id_target: str | None = None):
     @task
-    def get_unprocessed_target():
+    def get_unprocessed_target(target_name=None, sas_id_target=None):
         field = None
-        for dbrow in CURRENT_DB.get_db_columns():
+        for dbrow in CURRENT_DB.get_db_columns(
+            sas_id_target or "", intent="widefield"
+        ):
             is_processing = False
             row = dict(dbrow)
+            if target_name and row["target_name"] != target_name:
+                continue
             if row["status"] == FIELD_STATUS.downloading.value:
                 is_processing = True
                 break
@@ -144,13 +129,13 @@ def ilotss():
                 field = row
                 break
         if not field:
-            raise AirflowSkipException("No unprocessed fields found.")
+            return None
         print(field["target_name"])
         return field
 
-    @task.short_circuit
+    @task
     def check_fields():
-        fields = CURRENT_DB.get_db_columns()
+        fields = CURRENT_DB.get_db_columns(intent="widefield")
         return bool(fields)
 
     @task
@@ -188,7 +173,7 @@ def ilotss():
                 num_staged_targ = int(out.strip())
 
             if ("sas_id_target" not in field) or (not field["sas_id_target"]):
-                raise AirflowFailException(
+                raise RuntimeError(
                     f"No target SAS ID in database for field {field['target_name']}"
                 )
 
@@ -377,7 +362,8 @@ def ilotss():
     def run_linc_calibrator1(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if not field["sas_id_calibrator1"]:
-            raise AirflowSkipException("Calibrator 1 does not exist, skipping.")
+            print("Calibrator 1 does not exist, skipping.")
+            return None
         if field["status_calibrator1"] == PIPELINE_STATUS.finished.value:
             print(
                 f"Flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']} already processed."
@@ -396,7 +382,8 @@ def ilotss():
     def run_linc_calibrator2(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if not field["sas_id_calibrator2"]:
-            raise AirflowSkipException("Calibrator 2 does not exist, skipping.")
+            print("Calibrator 2 does not exist, skipping.")
+            return None
         if field["status_calibrator2"] == PIPELINE_STATUS.finished.value:
             print(
                 f"Flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']} already processed."
@@ -411,7 +398,7 @@ def ilotss():
                 raise RuntimeError("Invalid CWL runner specified.")
         return field
 
-    @task(trigger_rule=TriggerRule.ALL_DONE)
+    @task
     def select_best_calibrator(result1, result2):
         if result1 and (not result2):
             print("Only cal 1 succeeded, continuing with that")
@@ -495,7 +482,7 @@ def ilotss():
                         )
                         return result2
         else:
-            raise AirflowFailException("No calibrators succeeded; stopping processing.")
+            raise RuntimeError("No calibrators succeeded; stopping processing.")
 
     @task
     def run_linc_target(field):
@@ -550,7 +537,7 @@ def ilotss():
                         jobid = line.strip().split()[-1]
                         break
                 else:
-                    raise AirflowFailException("Failed to recover job id from log.")
+                    raise RuntimeError("Failed to recover job id from log.")
 
                 while True:
                     print(f"Polling DDF-pipeine job {jobid}")
@@ -686,26 +673,40 @@ def ilotss():
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=0.3)
         return field
 
-    proceed = check_fields()
-    get_field = get_unprocessed_target()
+    if not check_fields():
+        return None
+
+    get_field = get_unprocessed_target(target_name, sas_id_target)
+    if get_field is None:
+        print("No unprocessed widefield observation found.")
+        return None
+
     field = download_field(get_field)
-    result_cal1 = run_linc_calibrator1(field)
-    result_cal2 = run_linc_calibrator2(field)
+    calibrator1_future = run_linc_calibrator1.submit(field)
+    calibrator2_future = run_linc_calibrator2.submit(field)
+    result_cal1 = None
+    result_cal2 = None
+    try:
+        result_cal1 = calibrator1_future.result()
+    except Exception as exc:
+        print(f"Calibrator 1 processing failed: {exc}")
+    try:
+        result_cal2 = calibrator2_future.result()
+    except Exception as exc:
+        print(f"Calibrator 2 processing failed: {exc}")
     best_cal = select_best_calibrator(result_cal1, result_cal2)
     result_targ = run_linc_target(best_cal)
     linc_is_valid = validate_linc_target(result_targ)
     result_vlbi_delay = run_vlbi_delay(linc_is_valid)
 
-    proceed >> get_field
-    await_approval_delay = PythonSensor(
-        task_id="approve_delay",
-        python_callable=get_approval,
-        poke_interval=60,
-        timeout=86400 * 7,
-        mode="poke",
-        op_args=[result_vlbi_delay, "vlbi_delay", NEEDS_MANUAL_APPROVAL_DELAY],
-    )
-    result_prepare_ddf = prepare_ddf(result_vlbi_delay)
+    @task(name="wait-for-delay-approval")
+    def approve_delay(field):
+        return wait_for_approval(
+            field, "vlbi_delay", NEEDS_MANUAL_APPROVAL_DELAY
+        )
+
+    approved_field = approve_delay(result_vlbi_delay)
+    result_prepare_ddf = prepare_ddf(approved_field)
     result_ddf = run_ddf_pipeline(result_prepare_ddf)
     result_prepare_ddf_subtract = prepare_ddf_subtract(result_ddf)
     result_ddf_subtract = run_ddf_subtract(result_prepare_ddf_subtract)
@@ -718,14 +719,12 @@ def ilotss():
     _result_vlbi_facet_img_0p6 = run_vlbi_facet_imaging_0p6(result_vlbi_facet_subtract)
     _result_vlbi_facet_img_0p3 = run_vlbi_facet_imaging_0p3(result_vlbi_facet_subtract)
 
-    (
-        await_approval_delay
-        >> result_prepare_ddf
-        >> result_ddf
-        >> result_prepare_ddf_subtract
-        >> result_ddf_subtract
-        >> result_vlbi_dd
-    )
+    return {
+        "field": field["target_name"],
+        "sas_id_target": field["sas_id_target"],
+        "status": "completed",
+    }
 
 
-ilotss()
+if __name__ == "__main__":
+    ilotss()

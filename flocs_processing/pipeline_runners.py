@@ -1,31 +1,16 @@
-import configparser
 import os
 import pathlib
 import re
 import subprocess
 import time
 
-from airflow.exceptions import AirflowFailException
-from airflow.sdk import get_current_context
+from prefect.runtime import task_run
 from losoto.h5parm import h5parm
 
+from flocs_processing.config import load_config
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
 
-# Need to think of a way to centralise this and not read multiple times here and in the DAG
-if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
-    if not pathlib.Path(os.path.expandvars("$HOME/.flocs_airflow.cfg")).is_file():
-        raise RuntimeError(
-            "FLOCS_AIRFLOW_CONFIG environment variable not set and no $HOME/.flocs_airflow.cfg exists. Please create a valid configuration file."
-        )
-    else:
-        CONFIG_FILE = os.path.expandvars("$HOME/.flocs_airflow.cfg")
-else:
-    CONFIG_FILE = os.getenv("FLOCS_AIRFLOW_CONFIG") or ""
-
-parser = configparser.ConfigParser()
-parser.optionxform = str  # ty: ignore[invalid-assignment]
-with open(CONFIG_FILE, "r") as config:
-    parser.read_string("[DEFAULT]\n" + config.read())
+parser = load_config()
 
 print("Config summary:")
 for k, v in parser["DEFAULT"].items():
@@ -273,12 +258,11 @@ def run_linc_target_toil(field, db: FlocsDB):
         calibrator_path / "results_LINC_calibrator" / "cal_solutions.h5"
     )
     db.set_status_processing(field["target_name"], "target", field["sas_id_target"])
-    context = get_current_context()
     log_path = os.path.join(
         logsdir,
         f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
     )
-    if context["ti"].try_number == 1 or not os.path.isfile(log_path):
+    if task_run.run_count == 1 or not os.path.isfile(log_path):
         cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --output-fullres-data --cal-solutions {calibrator_solutions} {os.path.join(DATA_DIR, field['target_name'], 'target', ms_folder)}"
     else:
         flocs_workdir = ""
@@ -507,8 +491,7 @@ def run_pilot_delay_toil(field, db: FlocsDB, mode="widefield"):
         print(f"Excluding the following bad nodes from scheduling: {bad_nodes}")
         os.environ["TOIL_SLURM_ARGS"] = f"--exclude={bad_nodes}"
 
-    context = get_current_context()
-    if context["ti"].try_number == 1 or (
+    if task_run.run_count == 1 or (
         not os.path.isfile(
             os.path.join(
                 logsdir,
@@ -606,7 +589,7 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
 
         source_cat = os.path.join(DATA_DIR, field["target_name"], "vlbi_target.csv")
         if not os.path.isfile(source_cat):
-            raise AirflowFailException(f"{source_cat} not found.")
+            raise FileNotFoundError(f"{source_cat} not found.")
 
         db.set_status_processing(
             field["target_name"], "vlbi_dd", field["sas_id_target"]
@@ -625,7 +608,7 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
 
         source_cat = os.path.join(DATA_DIR, field["target_name"], "image_catalogue.csv")
         if not os.path.isfile(source_cat):
-            raise AirflowFailException(f"{source_cat} not found.")
+            raise FileNotFoundError(f"{source_cat} not found.")
 
         db.set_status_processing(
             field["target_name"], "vlbi_dd", field["sas_id_target"]
@@ -710,7 +693,7 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
 
         source_cat = os.path.join(DATA_DIR, field["target_name"], "vlbi_target.csv")
         if not os.path.isfile(source_cat):
-            raise AirflowFailException(f"{source_cat} not found.")
+            raise FileNotFoundError(f"{source_cat} not found.")
 
         db.set_status_processing(
             field["target_name"], "vlbi_dd", field["sas_id_target"]
@@ -729,14 +712,13 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
 
         source_cat = os.path.join(DATA_DIR, field["target_name"], "image_catalogue.csv")
         if not os.path.isfile(source_cat):
-            raise AirflowFailException(f"{source_cat} not found.")
+            raise FileNotFoundError(f"{source_cat} not found.")
 
         db.set_status_processing(
             field["target_name"], "vlbi_dd", field["sas_id_target"]
         )
 
-        context = get_current_context()
-        if context["ti"].try_number == 1 or (
+        if task_run.run_count == 1 or (
             not os.path.isfile(
                 os.path.join(
                     logsdir,
@@ -833,14 +815,13 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
     print(f"Using dd solutions: {dd_sols}")
 
     if not os.path.isfile(dd_sols):
-        raise AirflowFailException(f"{dd_sols} not found.")
+        raise FileNotFoundError(f"{dd_sols} not found.")
 
     db.set_status_processing(
         field["target_name"], "vlbi_intermediate_img", field["sas_id_target"]
     )
 
-    context = get_current_context()
-    if context["ti"].try_number == 1 or (
+    if task_run.run_count == 1 or (
         not os.path.isfile(
             os.path.join(
                 logsdir,
@@ -949,7 +930,7 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
     print(f"Using dd solutions at: {dd_sols}")
 
     if not os.path.isfile(dd_sols):
-        raise AirflowFailException(f"{dd_sols} not found.")
+        raise FileNotFoundError(f"{dd_sols} not found.")
 
     model_images_path = get_most_recent_run(
         outdir, field["sas_id_target"], "VLBI_intermediate_resolution_imaging"
@@ -961,7 +942,7 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
     print(f"Using model images at: {model_images_path}")
 
     if not model_images:
-        raise AirflowFailException(
+        raise RuntimeError(
             "No suitable intermediate resolution model images found."
         )
 
@@ -969,8 +950,7 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
         field["target_name"], "vlbi_facet_subtract", field["sas_id_target"]
     )
 
-    context = get_current_context()
-    if context["ti"].try_number == 1 or (
+    if task_run.run_count == 1 or (
         not os.path.isfile(
             os.path.join(
                 logsdir,
@@ -1067,7 +1047,7 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB, resolution: float = 6.0):
     facet_mses = list(target_ms_path.glob("facet*.ms"))
 
     if not facet_mses:
-        raise AirflowFailException(
+        raise RuntimeError(
             "No suitable intermediate resolution model images found."
         )
 
@@ -1076,8 +1056,7 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB, resolution: float = 6.0):
     )
 
     pixel_scale = resolution / 4
-    context = get_current_context()
-    if context["ti"].try_number == 1 or (
+    if task_run.run_count == 1 or (
         not os.path.isfile(
             os.path.join(
                 logsdir,
@@ -1385,8 +1364,7 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
     ddf_sols_path = ddf_path / "SOLSDIR"
     print(f"Using DDF run at: {ddf_path}")
 
-    context = get_current_context()
-    if context["ti"].try_number == 1 or (
+    if task_run.run_count == 1 or (
         not os.path.isfile(
             os.path.join(
                 logsdir,

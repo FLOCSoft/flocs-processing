@@ -1,5 +1,6 @@
 from enum import Enum
-from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
+from flocs_processing.db_utils import FIELD_STATUS, PIPELINE_STATUS, FlocsDB
+from flocs_processing.config import load_config
 from flocs_processing.pipeline_runners import (
     get_most_recent_run,
     run_linc_calibrator_cwltool,
@@ -12,37 +13,19 @@ from flocs_processing.pipeline_runners import (
     run_pilot_ddcal_toil,
 )
 
-import configparser
 import datetime
 import os
 import pathlib
 import random
-import sqlite3
 import subprocess
 import time
 
-from airflow.exceptions import AirflowFailException
-from airflow.sdk import dag, task
-from airflow.providers.standard.sensors.python import PythonSensor
-from airflow.sdk.exceptions import AirflowSkipException
-from airflow.task.trigger_rule import TriggerRule
+from prefect import flow, task
 from flocs_lta.lta_search import ObservationStager
 from autoPILOT.ilotss.assess_calibrators import assess_and_compare
 from stager_access import get_surls_requested, get_surls_online, reschedule, get_status
 
-if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
-    raise RuntimeError(
-        "FLOCS_AIRFLOW_CONFIG environment variable not set. Please point this to a valid configuration file."
-    )
-
-CONFIG_FILE: str = os.getenv("FLOCS_AIRFLOW_CONFIG") or ""
-if not os.path.isfile(CONFIG_FILE):
-    raise RuntimeError(f"{CONFIG_FILE} is not a valid file")
-
-parser = configparser.ConfigParser()
-parser.optionxform = str  # ty: ignore[invalid-assignment]
-with open(CONFIG_FILE, "r") as config:
-    parser.read_string("[DEFAULT]\n" + config.read())
+parser = load_config()
 
 print("Config summary:")
 for k, v in parser["DEFAULT"].items():
@@ -100,29 +83,33 @@ class STAGING_STATUS(Enum):
             raise NotImplementedError
 
 
-def get_approval(field, identifier, needs_approval):
+def wait_for_approval(field, identifier, needs_approval, timeout=86400 * 7):
     if not needs_approval:
         return field
-    with sqlite3.connect(DATABASE) as db:
-        db.row_factory = sqlite3.Row
-        cursor = db.cursor()
-        columns = f"sas_id_target,status_{identifier}"
-        field = cursor.execute(
-            f"select {columns} from {TABLE_NAME} where sas_id_target=='{field['sas_id_target']}'"
-        ).fetchall()
-        status = field[0][f"status_{identifier}"]
-    if status == PIPELINE_STATUS.finished.value:
-        return field
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        rows = CURRENT_DB.get_db_columns(field["sas_id_target"], intent="single-target")
+        if rows and rows[0][f"status_{identifier}"] == PIPELINE_STATUS.finished.value:
+            return dict(rows[0])
+        time.sleep(60)
+    raise TimeoutError(f"Approval for {identifier} was not received within {timeout} seconds.")
 
 
-@dag(max_active_runs=4)
-def pilot_single_target():
+@flow
+def pilot_single_target(target_name: str | None = None, sas_id_target: str | None = None):
     @task
-    def get_unprocessed_target():
+    def get_unprocessed_target(target_name=None, sas_id_target=None):
         field = None
-        for dbrow in CURRENT_DB.get_db_columns():
+        for dbrow in CURRENT_DB.get_db_columns(
+            sas_id_target or "", intent="single-target"
+        ):
             is_processing = False
             row = dict(dbrow)
+            if target_name and row["target_name"] != target_name:
+                continue
+            if row["status"] == FIELD_STATUS.downloading.value:
+                continue
             status_keys = filter(lambda x: x.startswith("status_"), row.keys())
             for key in status_keys:
                 if row[key] == PIPELINE_STATUS.processing.value:
@@ -133,13 +120,13 @@ def pilot_single_target():
                 field = row
                 break
         if not field:
-            raise AirflowSkipException("No unprocessed fields found.")
+            return None
         print(field["target_name"])
         return field
 
-    @task.short_circuit
+    @task
     def check_fields():
-        fields = CURRENT_DB.get_db_columns()
+        fields = CURRENT_DB.get_db_columns(intent="single-target")
         return bool(fields)
 
     @task
@@ -174,7 +161,7 @@ def pilot_single_target():
                 num_staged_targ = int(out.strip())
 
             if ("sas_id_target" not in field) or (not field["sas_id_target"]):
-                raise AirflowFailException(
+                raise RuntimeError(
                     f"No target SAS ID in database for field {field['target_name']}"
                 )
 
@@ -358,9 +345,12 @@ def pilot_single_target():
 
     @task
     def run_linc_calibrator1(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        field = dict(
+            CURRENT_DB.get_db_columns(field["sas_id_target"], intent="single-target")[0]
+        )
         if not field["sas_id_calibrator1"]:
-            raise AirflowSkipException("Calibrator 1 does not exist, skipping.")
+            print("Calibrator 1 does not exist, skipping.")
+            return None
         if field["status_calibrator1"] == PIPELINE_STATUS.finished.value:
             print(
                 f"Flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']} already processed."
@@ -377,9 +367,12 @@ def pilot_single_target():
 
     @task
     def run_linc_calibrator2(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        field = dict(
+            CURRENT_DB.get_db_columns(field["sas_id_target"], intent="single-target")[0]
+        )
         if not field["sas_id_calibrator2"]:
-            raise AirflowSkipException("Calibrator 2 does not exist, skipping.")
+            print("Calibrator 2 does not exist, skipping.")
+            return None
         if field["status_calibrator2"] == PIPELINE_STATUS.finished.value:
             print(
                 f"Flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']} already processed."
@@ -394,14 +387,16 @@ def pilot_single_target():
                 raise RuntimeError("Invalid CWL runner specified.")
         return field
 
-    @task(trigger_rule=TriggerRule.ALL_DONE)
+    @task
     def select_best_calibrator(field, result1, result2):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        field = dict(
+            CURRENT_DB.get_db_columns(field["sas_id_target"], intent="single-target")[0]
+        )
         # Just in case we are out of sync with the database (could happen on e.g. manually marking success).
         result1 = field if field["sas_id_calibrator1"] is not None else None
         result2 = field if field["sas_id_calibrator2"] is not None else None
         if (not result1) and (not result2):
-            raise AirflowFailException("No successful calibrators")
+            raise RuntimeError("No successful calibrators")
 
         if result1 and (not result2):
             print("Only cal 1 succeeded, continuing with that")
@@ -413,7 +408,7 @@ def pilot_single_target():
                 )
                 return result1
             else:
-                raise AirflowFailException("Calibrator 1 failed.")
+                raise RuntimeError("Calibrator 1 failed.")
         elif (not result1) and result2:
             print("Only cal 2 succeeded, continuing with that")
             CURRENT_DB.set_final_calibrator(
@@ -488,11 +483,13 @@ def pilot_single_target():
                         )
                         return result2
         else:
-            raise AirflowFailException("No calibrators succeeded; stopping processing.")
+            raise RuntimeError("No calibrators succeeded; stopping processing.")
 
     @task
     def run_linc_target(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        field = dict(
+            CURRENT_DB.get_db_columns(field["sas_id_target"], intent="single-target")[0]
+        )
         if (field["status_target"] == PIPELINE_STATUS.finished.value) or (
             field["status_target"] == PIPELINE_STATUS.processing.value
         ):
@@ -512,7 +509,9 @@ def pilot_single_target():
 
     @task(retries=0, retry_delay=datetime.timedelta(seconds=5))
     def run_vlbi_delay(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        field = dict(
+            CURRENT_DB.get_db_columns(field["sas_id_target"], intent="single-target")[0]
+        )
         if field["status_vlbi_delay"] == PIPELINE_STATUS.finished.value:
             return field
         else:
@@ -526,7 +525,9 @@ def pilot_single_target():
 
     @task
     def run_vlbi_ddcal(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        field = dict(
+            CURRENT_DB.get_db_columns(field["sas_id_target"], intent="single-target")[0]
+        )
         if (field["status_vlbi_dd"] == PIPELINE_STATUS.finished.value) or (
             field["status_vlbi_dd"] == PIPELINE_STATUS.processing.value
         ):
@@ -540,28 +541,41 @@ def pilot_single_target():
                 raise RuntimeError("Invalid CWL runner specified.")
         return field
 
-    proceed = check_fields()
-    get_field = get_unprocessed_target()
+    if not check_fields():
+        return None
+
+    get_field = get_unprocessed_target(target_name, sas_id_target)
+    if get_field is None:
+        print("No unprocessed single-target observation found.")
+        return None
+
     field = download_field(get_field)
-    result_cal1 = run_linc_calibrator1(field)
-    result_cal2 = run_linc_calibrator2(field)
+    calibrator1_future = run_linc_calibrator1.submit(field)
+    calibrator2_future = run_linc_calibrator2.submit(field)
+    result_cal1 = None
+    result_cal2 = None
+    try:
+        result_cal1 = calibrator1_future.result()
+    except Exception as exc:
+        print(f"Calibrator 1 processing failed: {exc}")
+    try:
+        result_cal2 = calibrator2_future.result()
+    except Exception as exc:
+        print(f"Calibrator 2 processing failed: {exc}")
     best_cal = select_best_calibrator(field, result_cal1, result_cal2)
     result_targ = run_linc_target(best_cal)
     linc_is_valid = validate_linc_target(result_targ)
     result_vlbi_delay = run_vlbi_delay(linc_is_valid)
 
-    proceed >> get_field
-    await_approval_delay = PythonSensor(
-        task_id="approve_delay",
-        python_callable=get_approval,
-        poke_interval=60,
-        timeout=86400 * 7,
-        mode="poke",
-        op_args=[result_vlbi_delay, "vlbi_delay", NEEDS_MANUAL_APPROVAL_DELAY],
-    )
-    result_vlbi_dd = run_vlbi_ddcal(result_vlbi_delay)
+    @task(name="wait-for-delay-approval")
+    def approve_delay(field):
+        return wait_for_approval(
+            field, "vlbi_delay", NEEDS_MANUAL_APPROVAL_DELAY
+        )
 
-    (await_approval_delay >> result_vlbi_dd)
+    approved_field = approve_delay(result_vlbi_delay)
+    return run_vlbi_ddcal(approved_field)
 
 
-pilot_single_target()
+if __name__ == "__main__":
+    pilot_single_target()

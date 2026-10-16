@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 from .db_utils import FlocsDB
-from .processors import FlocsAirflowProcessor
+from .processors import deploy_prefect as register_prefect_deployments
 from cyclopts import Parameter
 from enum import Enum
 import cyclopts
 import functools
 import subprocess
 import structlog
-from typing import Annotated, Literal, Optional, get_args
+from typing import Annotated, Literal, get_args
 
 app = cyclopts.App()
 
@@ -233,24 +233,16 @@ def update_pipeline_status(
                 db.set_status_finished(field_name, pipeline, sas_id_target)
 
 
-@app.command()
-def deploy_airflow(
-    airflow_cores: Annotated[
-        int, Parameter(help="Number of cores to give to Airflow.")
-    ] = 6,
-    custom_airflow_home: Annotated[
-        Optional[str],
+@app.command(name="deploy-prefect")
+def deploy_prefect(
+    deployment: Annotated[
+        str | None,
         Parameter(
-            help="Directory where Airflow stores its internal data. If given this overrides $AIRFLOW_HOME. If not given, $AIRFLOW_HOME is used to define other related variables."
+            help="Deployment name to register; omit to register all deployments in prefect.yaml."
         ),
-    ] = "",
+    ] = None,
 ):
-    fp = FlocsAirflowProcessor(custom_airflow_home, airflow_cores)
-    fp.generate_jwt_secret()
-    fp.check_environment()
-    fp.check_airflow_init()
-    fp.write_source_file()
-    fp.deploy_airflow_tmux()
+    register_prefect_deployments(deployment)
 
 
 def main():
