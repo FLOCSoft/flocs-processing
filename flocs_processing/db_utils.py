@@ -57,13 +57,13 @@ class FlocsDB:
             if obsid:
                 field = cursor.execute(
                     f"select {columns} from {self.TABLE_NAME} where sas_id_target=='{obsid}'"
-                    + (f" and where pipelines like '%{intent}%'" if intent else "")
+                    + (f" and pipelines like '%{intent}%'" if intent else "")
                     + " order by priority desc"
                 ).fetchall()
             else:
                 field = cursor.execute(
                     f"select {columns} from {self.TABLE_NAME} where status=='not started="
-                    + (f" and where pipelines like '%{intent}%'" if intent else "")
+                    + (f" and pipelines like '%{intent}%'" if intent else "")
                     + " order by priority desc"
                 ).fetchall()
             print(field)
