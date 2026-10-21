@@ -44,8 +44,8 @@ class FlocsDB:
         self.DATABASE = dbname
         self.TABLE_NAME = db_table
 
-    def get_db_columns(self, obsid: str = "", intent=""):
-        valid_intent = ["widefield", "single-target"]
+    def get_db_columns(self, obsid: str = "", intent="?"):
+        valid_intent = ["widefield", "single-target", "?"]
         if intent not in valid_intent:
             raise ValueError(
                 f"Cannot query intent {intent}. Valid options are {', '.join(valid_intent)}"
