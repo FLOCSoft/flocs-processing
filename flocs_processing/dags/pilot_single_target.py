@@ -14,13 +14,17 @@ from flocs_processing.pipeline_runners import (
 
 import configparser
 import datetime
+import io
 import os
 import pathlib
 import random
+import re
 import sqlite3
 import subprocess
 import time
+from contextlib import redirect_stdout
 
+from astropy.coordinates import Angle, SkyCoord
 from airflow.exceptions import AirflowFailException
 from airflow.sdk import dag, task
 from airflow.providers.standard.sensors.python import PythonSensor
@@ -29,7 +33,6 @@ from airflow.task.trigger_rule import TriggerRule
 from flocs_lta.lta_search import ObservationStager
 from autoPILOT.ilotss.assess_calibrators import assess_and_compare
 from stager_access import get_surls_requested, get_surls_online, reschedule, get_status
-from flocs_processing.target_selection import parse_target_coordinates
 
 if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
     raise RuntimeError(
@@ -65,6 +68,43 @@ NEEDS_MANUAL_APPROVAL_DELAY = parser.getboolean(
 TARGET_COORDINATE_MATCH_RADIUS_DEG = parser.getfloat(
     "DEFAULT", "TARGET_COORDINATE_MATCH_RADIUS_DEG", fallback=1.3
 )
+_COORDINATE_TARGET_RE = re.compile(
+    r"^(?:ILT)?J(?P<rah>\d{2})(?P<ram>\d{2})(?P<ras>\d{2}(?:\.\d+)?)"
+    r"(?P<sign>[+-])(?P<decd>\d{2})(?P<decm>\d{2})"
+    r"(?P<decs>\d{2}(?:\.\d+)?)$",
+    re.IGNORECASE,
+)
+
+
+def parse_target_coordinates(target_name):
+    """Parse compact IAU target names into an Astropy SkyCoord."""
+    match = _COORDINATE_TARGET_RE.fullmatch(
+        (target_name or "").strip().replace(" ", "")
+    )
+    if not match:
+        return None
+    ra = f"{match['rah']}h{match['ram']}m{match['ras']}s"
+    dec = f"{match['sign']}{match['decd']}d{match['decm']}m" f"{match['decs']}s"
+    return SkyCoord(f"{ra} {dec}", frame="icrs")
+
+
+def parse_position_search_output(output):
+    """Extract SAS ID, SAPI, and angular distance from flocs-lta output."""
+    matches = []
+    obsid = sapid = None
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith("Obsid:"):
+            obsid = line.partition(":")[2].strip()
+            sapid = None
+        elif line.startswith("SAPI:") and obsid:
+            sapid = line.partition(":")[2].strip()
+        elif line.startswith("Distance:") and obsid and sapid:
+            distance = Angle(line.partition(":")[2].strip()).to_value("deg")
+            matches.append((obsid, sapid, distance))
+            obsid = sapid = None
+    return matches
+
 
 CWL_RUNNER_LINC_CALIBRATOR = "cwltool"
 CWL_RUNNER_LINC_TARGET = "toil"
@@ -154,6 +194,7 @@ def pilot_single_target():
         if field["downloaded"]:
             return field
         else:
+            database_target_sasid = str(field["sas_id_target"])
             stage_calibrators = False
             num_downloaded_calib1 = 0
             num_downloaded_calib2 = 0
@@ -266,23 +307,61 @@ def pilot_single_target():
                             f"({target_coordinates.ra.deg:.7f}, "
                             f"{target_coordinates.dec.deg:.7f}) deg."
                         )
-                        # flocs-lta currently searches all observations here; reject
-                        # a positional match unless it resolves to this DB row's SAS ID.
-                        stager.find_observation_by_position(
+                        position_output = io.StringIO()
+                        with redirect_stdout(position_output):
+                            try:
+                                stager.find_observation_by_position(
+                                    "ALL",
+                                    target_coordinates.ra.deg,
+                                    target_coordinates.dec.deg,
+                                    TARGET_COORDINATE_MATCH_RADIUS_DEG,
+                                    0,
+                                    120,
+                                    168,
+                                )
+                            except SystemExit:
+                                # The current stager exits on multiple positional
+                                # matches, after printing each SAS ID and SAPI.
+                                pass
+                        print(position_output.getvalue())
+                        position_matches = parse_position_search_output(
+                            position_output.getvalue()
+                        )
+                        if not position_matches:
+                            raise ValueError(
+                                "Position search found no SAS ID/SAPI matches for "
+                                f"{field['target_name']!r}."
+                            )
+                        exact_sasid_matches = [
+                            match
+                            for match in position_matches
+                            if match[0] == database_target_sasid
+                        ]
+                        candidate_matches = exact_sasid_matches or position_matches
+                        selected_sasid, selected_sapid, separation_deg = min(
+                            candidate_matches, key=lambda match: match[2]
+                        )
+                        print(
+                            f"Using position match SAS ID {selected_sasid} "
+                            f"with SAPI {selected_sapid} "
+                            f"({separation_deg:.6f} deg away)."
+                        )
+                        stager.find_observation_by_sasid(
                             "ALL",
-                            target_coordinates.ra.deg,
-                            target_coordinates.dec.deg,
-                            TARGET_COORDINATE_MATCH_RADIUS_DEG,
-                            0,
+                            selected_sasid,
+                            selected_sapid,
                             120,
                             168,
                         )
-                        resolved_obsid = getattr(stager, "obsid", None)
-                        if str(resolved_obsid) != str(field["sas_id_target"]):
+                        if str(stager.obsid) != selected_sasid:
                             raise ValueError(
-                                "Position search resolved SAS ID "
-                                f"{resolved_obsid!r}, expected "
-                                f"{field['sas_id_target']!r}."
+                                f"SAS-ID staging resolved {stager.obsid!r}, expected "
+                                f"{selected_sasid!r}."
+                            )
+                        if str(stager.sapid) != selected_sapid:
+                            raise ValueError(
+                                f"SAS-ID staging resolved SAPI {stager.sapid!r}, "
+                                f"expected {selected_sapid!r}."
                             )
                     else:
                         stager.find_observation_by_sasid(
@@ -317,8 +396,15 @@ def pilot_single_target():
                     ) from err
                 if stage_calibrators:
                     stager.find_nearest_calibrators(2, 120, 168)
+                    CURRENT_DB.set_field_downloading(
+                        field["target_name"], database_target_sasid
+                    )
                     stage_id_calibrators = stager.stage_calibrators()
                 if stage_target:
+                    if not stage_calibrators:
+                        CURRENT_DB.set_field_downloading(
+                            field["target_name"], database_target_sasid
+                        )
                     stage_id_target = stager.stage_target()
             else:
                 return field
@@ -400,9 +486,15 @@ def pilot_single_target():
                                 cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                             )
                             if not proc.returncode:
+                                actual_sasid = str(stager.obsid)
+                                CURRENT_DB.update_target_sas_id(
+                                    database_target_sasid, actual_sasid
+                                )
+                                field["sas_id_target"] = actual_sasid
                                 CURRENT_DB.set_status_downloaded(
                                     field["target_name"],
-                                    field["sas_id_target"],
+                                    "target",
+                                    actual_sasid,
                                 )
                                 target_downloaded = True
                             else:
