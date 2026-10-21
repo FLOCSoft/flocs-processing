@@ -172,7 +172,7 @@ def pilot_single_target():
                 if row[key] == PIPELINE_STATUS.processing.value:
                     is_processing = True
                     break
-            if not is_processing:
+            if not is_processing and (row["status"] != "downloading"):
                 # Only select a field if nothing is processing it.
                 field = row
                 break

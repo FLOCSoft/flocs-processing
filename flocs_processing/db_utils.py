@@ -156,6 +156,25 @@ class FlocsDB:
                 f"update {self.TABLE_NAME} set downloaded=1 where target_name=='{name}' and sas_id_target=='{target}'"
             )
 
+    def update_target_sas_id(self, old_sas_id: str, new_sas_id: str):
+        """Replace the target SAS ID primary key after resolving an archive product."""
+        if not old_sas_id or not new_sas_id:
+            raise ValueError("Both old and new target SAS IDs must be provided.")
+        if old_sas_id == new_sas_id:
+            return
+
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.cursor()
+            cursor.execute(
+                f"update {self.TABLE_NAME} set sas_id_target=? where sas_id_target=?",
+                (new_sas_id, old_sas_id),
+            )
+            if cursor.rowcount != 1:
+                raise LookupError(
+                    f"Expected one database row with target SAS ID {old_sas_id}, "
+                    f"updated {cursor.rowcount}."
+                )
+
     def set_final_calibrator(self, name, target, final_cal):
         with sqlite3.connect(self.DATABASE) as db:
             cursor = db.cursor()
