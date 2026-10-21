@@ -29,6 +29,7 @@ from airflow.task.trigger_rule import TriggerRule
 from flocs_lta.lta_search import ObservationStager
 from autoPILOT.ilotss.assess_calibrators import assess_and_compare
 from stager_access import get_surls_requested, get_surls_online, reschedule, get_status
+from flocs_processing.target_selection import parse_target_coordinates
 
 if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
     raise RuntimeError(
@@ -60,6 +61,9 @@ DDF_CONFIG = parser["DEFAULT"]["DDF_CONFIG"]
 FLUX_CALIBRATOR_TEMPLATE = parser["DEFAULT"]["FLUX_CALIBRATOR_TEMPLATE"]
 NEEDS_MANUAL_APPROVAL_DELAY = parser.getboolean(
     "DEFAULT", "NEEDS_MANUAL_APPROVAL_DELAY"
+)
+TARGET_COORDINATE_MATCH_RADIUS_DEG = parser.getfloat(
+    "DEFAULT", "TARGET_COORDINATE_MATCH_RADIUS_DEG", fallback=1.3
 )
 
 CWL_RUNNER_LINC_CALIBRATOR = "cwltool"
@@ -252,13 +256,65 @@ def pilot_single_target():
             if stage_calibrators or stage_target:
                 print(f"Field {field['sas_id_target']} is not downloaded.")
                 stager = ObservationStager(get_surls=True)
-                stager.find_observation_by_sasid(
-                    "ALL",
-                    field["sas_id_target"],
-                    None,
-                    120,
-                    168,
-                )
+                try:
+                    target_coordinates = parse_target_coordinates(
+                        field.get("target_name") or ""
+                    )
+                    if target_coordinates is not None:
+                        print(
+                            f"Searching for target coordinates "
+                            f"({target_coordinates.ra.deg:.7f}, "
+                            f"{target_coordinates.dec.deg:.7f}) deg."
+                        )
+                        # flocs-lta currently searches all observations here; reject
+                        # a positional match unless it resolves to this DB row's SAS ID.
+                        stager.find_observation_by_position(
+                            "ALL",
+                            target_coordinates.ra.deg,
+                            target_coordinates.dec.deg,
+                            TARGET_COORDINATE_MATCH_RADIUS_DEG,
+                            0,
+                            120,
+                            168,
+                        )
+                        resolved_obsid = getattr(stager, "obsid", None)
+                        if str(resolved_obsid) != str(field["sas_id_target"]):
+                            raise ValueError(
+                                "Position search resolved SAS ID "
+                                f"{resolved_obsid!r}, expected "
+                                f"{field['sas_id_target']!r}."
+                            )
+                    else:
+                        stager.find_observation_by_sasid(
+                            "ALL",
+                            field["sas_id_target"],
+                            None,
+                            120,
+                            168,
+                        )
+                        if stager.sapid is None:
+                            usable_saps = [
+                                sap
+                                for sap in stager.target.subArrayPointings
+                                if sap.numberOfCorrelatedDataProducts > 1
+                            ]
+                            if len(usable_saps) > 1:
+                                raise ValueError(
+                                    f"Target name {field['target_name']!r} is not a "
+                                    "coordinate, and observation "
+                                    f"{field['sas_id_target']} has {len(usable_saps)} "
+                                    "usable SAPs. Provide coordinates to select a beam."
+                                )
+                except SystemExit as err:
+                    raise AirflowFailException(
+                        "flocs-lta could not resolve a unique observation for "
+                        f"{field['target_name']} ({field['sas_id_target']})."
+                    ) from err
+                except ValueError as err:
+                    raise AirflowFailException(
+                        f"Could not select a target beam for "
+                        f"{field['target_name']} ({field['sas_id_target']}): {err}"
+                    ) from err
                 if stage_calibrators:
                     stager.find_nearest_calibrators(2, 120, 168)
                     stage_id_calibrators = stager.stage_calibrators()
