@@ -44,8 +44,8 @@ class FlocsDB:
         self.DATABASE = dbname
         self.TABLE_NAME = db_table
 
-    def get_db_columns(self, obsid: str = "", intent="?"):
-        valid_intent = ["widefield", "single-target", "?"]
+    def get_db_columns(self, obsid: str = "", intent="%"):
+        valid_intent = ["widefield", "single-target", "%"]
         if intent not in valid_intent:
             raise ValueError(
                 f"Cannot query intent {intent}. Valid options are {', '.join(valid_intent)}"
@@ -54,16 +54,18 @@ class FlocsDB:
             db.row_factory = sqlite3.Row
             cursor = db.cursor()
             columns = "*"
+            if intent != "%":
+                intent = f"%{intent}%"
             if obsid:
                 field = cursor.execute(
                     f"select {columns} from {self.TABLE_NAME} where sas_id_target=='{obsid}'"
-                    + (f" and pipelines like '%{intent}%'" if intent else "")
+                    + (f" and pipelines like '{intent}'")
                     + " order by priority desc"
                 ).fetchall()
             else:
                 field = cursor.execute(
                     f"select {columns} from {self.TABLE_NAME} where status=='not started'"
-                    + (f" and pipelines like '%{intent}%'" if intent else "")
+                    + (f" and pipelines like '{intent}'")
                     + " order by priority desc"
                 ).fetchall()
             print(field)
