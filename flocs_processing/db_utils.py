@@ -64,7 +64,7 @@ class FlocsDB:
                 ).fetchall()
             else:
                 field = cursor.execute(
-                    f"select {columns} from {self.TABLE_NAME} where status=='not started'"
+                    f"select {columns} from {self.TABLE_NAME} where status=='not started' or status=='downloaded'"
                     + (f" and pipelines like '{intent}'")
                     + " order by priority desc"
                 ).fetchall()

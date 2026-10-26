@@ -14,6 +14,7 @@ from flocs_processing.pipeline_runners import (
 
 import configparser
 import datetime
+import glob
 import io
 import os
 import pathlib
@@ -192,6 +193,18 @@ def pilot_single_target():
         MAX_RESCHEDULES_CALIBRATOR = 3
         MAX_RESCHEDULES_TARGET = 3
         if field["downloaded"]:
+            obsids = glob.glob(
+                pathlib.Path(DATA_DIR) / field["target_name"] / "target" / "L*"
+            )
+            if len(obsids) > 1:
+                raise NotImplementedError("Cannot process multi-epoch data with this DAG (yet).")
+            else:
+                actual_sasid = obsids[0].name
+                if field["sas_id_target"] != actual_sasid:
+                    print(f"Updating target SAS id in database {field['sas_id_target']:s} -> {actual_sasid:s}")
+                # Slice to strip of the L prefix
+                CURRENT_DB.update_target_sas_id(field["sas_id_target"], actual_sasid[1:])
+            field["sas_id_target"] = actual_sasid
             return field
         else:
             database_target_sasid = str(field["sas_id_target"])
@@ -500,6 +513,8 @@ def pilot_single_target():
                             else:
                                 raise RuntimeError
                 if calibrator_downloaded and target_downloaded:
+                    CURRENT_DB.update_target_sas_id(database_target_sasid, actual_sasid)
+                    field["sas_id_target"] = actual_sasid
                     break
                 time.sleep(60)
             return field
