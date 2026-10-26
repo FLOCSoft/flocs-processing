@@ -570,7 +570,7 @@ def ilotss():
                     elif (
                         (status == "FAILED")
                         or ("TIMEOUT" in status)
-                        or ("CANCELELD" in status)
+                        or ("CANCELLED" in status)
                         or ("OUT_OF_MEM" in status)
                     ):
                         raise RuntimeError(
