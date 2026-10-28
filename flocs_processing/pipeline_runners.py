@@ -2,6 +2,7 @@ import configparser
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import time
 
@@ -61,6 +62,89 @@ def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.
     except IndexError:
         print(f"No {pipeline} run for {sas_id} found")
         raise RuntimeError(f"No {pipeline} run for {sas_id} found")
+
+
+def _ddf_pipeline_log_paths(field) -> tuple[pathlib.Path, pathlib.Path]:
+    logsdir = pathlib.Path(OUTPUT_DIR) / field["target_name"] / "logs"
+    prefix = f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}"
+    return logsdir / f"{prefix}.txt", logsdir / f"{prefix}_err.txt"
+
+
+def get_ddf_job_id_from_log(field) -> str:
+    stdout_log, _ = _ddf_pipeline_log_paths(field)
+    if not stdout_log.is_file():
+        raise RuntimeError(f"DDF-pipeline log not found: {stdout_log}")
+    log_contents = stdout_log.read_text(errors="replace")
+    job_ids = re.findall(r"Submitted batch job\s+(\d+)", log_contents)
+    if not job_ids:
+        raise RuntimeError(f"Failed to recover DDF-pipeline job id from {stdout_log}")
+    return job_ids[-1]
+
+
+def get_ddf_rundir_from_log(field) -> pathlib.Path:
+    stdout_log, stderr_log = _ddf_pipeline_log_paths(field)
+    log_contents = "\n".join(
+        path.read_text(errors="replace")
+        for path in (stdout_log, stderr_log)
+        if path.is_file()
+    )
+    rundirs = []
+    for line in log_contents.splitlines():
+        running_match = re.search(r"Running DDF-pipeline under \S+ in (.+?)\s*$", line)
+        if running_match:
+            rundirs.append((running_match.group(1).strip(), False))
+        restart_match = re.search(
+            r"Attempting to restart existing run from (.+?)\s*$", line
+        )
+        if restart_match:
+            rundirs.append((restart_match.group(1).strip(), True))
+
+    for raw_rundir, from_restart_log in reversed(rundirs):
+        candidates = [raw_rundir]
+        if from_restart_log and raw_rundir.endswith("."):
+            candidates.append(raw_rundir[:-1])
+        for candidate in candidates:
+            rundir = pathlib.Path(candidate).expanduser()
+            if rundir.is_dir():
+                return rundir.resolve()
+
+    raise RuntimeError(
+        f"Could not recover an existing DDF-pipeline working directory from "
+        f"{stdout_log} or {stderr_log}"
+    )
+
+
+def ddf_restart_attempted(field) -> bool:
+    stdout_log, _ = _ddf_pipeline_log_paths(field)
+    if not stdout_log.is_file():
+        return False
+    return "DDF_RESTART_ATTEMPT rundir=" in stdout_log.read_text(errors="replace")
+
+
+def poll_ddf_job(jobid: str, field) -> str:
+    failure_states = (
+        "FAILED",
+        "TIMEOUT",
+        "CANCELLED",
+        "OUT_OF_MEM",
+        "NODE_FAIL",
+        "PREEMPTED",
+        "BOOT_FAIL",
+        "DEADLINE",
+    )
+    while True:
+        print(f"Polling DDF-pipeline job {jobid} for {field['target_name']}")
+        result = subprocess.run(
+            ["sacct", "-X", "-j", jobid, "--format=State", "--noheader"],
+            text=True,
+            capture_output=True,
+        )
+        status = result.stdout.strip()
+        if status == "COMPLETED":
+            return status
+        if status.startswith(failure_states):
+            return status
+        time.sleep(60)
 
 
 def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
@@ -1466,7 +1550,12 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
             raise RuntimeError
 
 
-def launch_ddf_pipeline(field, db: FlocsDB):
+def launch_ddf_pipeline(
+    field,
+    db: FlocsDB,
+    restart: bool = False,
+    rundir: str | pathlib.Path | None = None,
+):
     print(f"Starting ddf-pipeline for {field['target_name']} {field['sas_id_target']}")
     outdir = os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
@@ -1482,58 +1571,63 @@ def launch_ddf_pipeline(field, db: FlocsDB):
         target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
         target_ms_path = target_path / "results_LINC_target" / "results"
 
-    cmd = f"flocs-run ddf-pipeline --scheduler slurm --slurm-time 72:00:00 --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --config-file {DDF_CONFIG} {target_ms_path}"
-    print(cmd)
+    if restart:
+        if rundir is None:
+            raise ValueError("A rundir must be supplied when restarting DDF-pipeline.")
+        rundir = pathlib.Path(rundir).expanduser().resolve()
+        if not rundir.is_dir():
+            raise NotADirectoryError(f"DDF-pipeline restart directory does not exist: {rundir}")
+
+    cmd = [
+        "flocs-run",
+        "ddf-pipeline",
+        "--scheduler",
+        "slurm",
+        "--slurm-time",
+        "72:00:00",
+        "--slurm-cores",
+        "32",
+        "--slurm-account",
+        SLURM_ACCOUNT,
+        "--slurm-queue",
+        SLURM_QUEUE,
+        "--rundir",
+        str(rundir) if restart else PROCESSING_DIR,
+        "--outdir",
+        outdir,
+        "--config-file",
+        DDF_CONFIG,
+    ]
+    if restart:
+        cmd.append("--restart")
+    cmd.append(str(target_ms_path))
+    print(shlex.join(cmd))
     db.set_status_processing(field["target_name"], "ddf", field["sas_id_target"])
+    stdout_log, stderr_log = _ddf_pipeline_log_paths(field)
+    log_mode = "a+" if restart else "w+"
     with (
-        open(
-            os.path.join(
-                logsdir,
-                f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}.txt",
-            ),
-            "w+",
-        ) as f_out,
-        open(
-            os.path.join(
-                logsdir,
-                f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}_err.txt",
-            ),
-            "w+",
-        ) as f_err,
+        stdout_log.open(log_mode, encoding="utf-8") as f_out,
+        stderr_log.open(log_mode, encoding="utf-8") as f_err,
     ):
-        proc = subprocess.run(cmd, shell=True, text=True, stdout=f_out, stderr=f_err)
-        jobid = None
-        if not proc.returncode:
-            f_out.seek(0)
-            for line in f_out.readlines():
-                if "Submitted batch job" in line:
-                    jobid = line.strip().split()[-1]
-        else:
+        if restart:
+            f_out.write(f"DDF_RESTART_ATTEMPT rundir={rundir}\n")
+        f_out.write(f"$ {shlex.join(cmd)}\n")
+        f_out.flush()
+        print(shlex.join(cmd))
+        proc = subprocess.run(cmd, text=True, stdout=f_out, stderr=f_err)
+        if proc.returncode:
             raise RuntimeError("Failed to submit job.")
 
-        if not jobid:
-            raise RuntimeError("Failed to retrieve job id")
-        else:
-            while True:
-                print(f"Polling DDF-pipeine job {jobid}")
-                poll_cmd = f"sacct -X -j {jobid} --format=State --noheader"
-                status = subprocess.run(
-                    poll_cmd, shell=True, text=True, capture_output=True
-                ).stdout.strip()
-                if (status == "RUNNING") or (status == "PENDING"):
-                    time.sleep(60)
-                elif status == "COMPLETED":
-                    db.set_status_finished(
-                        field["target_name"],
-                        "ddf",
-                        field["sas_id_target"],
-                    )
-                    break
-                elif (
-                    (status == "FAILED")
-                    or ("TIMEOUT" in status)
-                    or ("CANCELLED" in status)
-                ):
-                    raise RuntimeError(
-                        f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
-                    )
+    jobid = get_ddf_job_id_from_log(field)
+    status = poll_ddf_job(jobid, field)
+    if status == "COMPLETED":
+        db.set_status_finished(field["target_name"], "ddf", field["sas_id_target"])
+        return
+
+    if restart or ddf_restart_attempted(field):
+        raise RuntimeError(
+            f"DDF-pipeline restart for {field['target_name']} {field['sas_id_target']} failed with status {status}."
+        )
+
+    rundir = get_ddf_rundir_from_log(field)
+    launch_ddf_pipeline(field, db, restart=True, rundir=rundir)

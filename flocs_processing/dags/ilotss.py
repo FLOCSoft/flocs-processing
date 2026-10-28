@@ -3,6 +3,10 @@ from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
 from flocs_processing.flocs_processing import FIELD_STATUS
 from flocs_processing.pipeline_runners import (
     get_most_recent_run,
+    get_ddf_job_id_from_log,
+    get_ddf_rundir_from_log,
+    ddf_restart_attempted,
+    poll_ddf_job,
     run_linc_calibrator_cwltool,
     run_linc_calibrator_toil,
     run_linc_target_cwltool,
@@ -532,50 +536,36 @@ def ilotss():
     @task
     def run_ddf_pipeline(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
         if field["status_ddf"] == PIPELINE_STATUS.processing.value:
             print(
                 f"ddf-pipeline for {field['target_name']} {field['sas_id_target']} should be running, attempting to resume polling..."
             )
-            with open(
-                os.path.join(
-                    logsdir,
-                    f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}.txt",
-                ),
-                "r",
-            ) as f_out:
-                jobid = None
-                for line in f_out.readlines():
-                    if "Submitted batch job" in line:
-                        jobid = line.strip().split()[-1]
-                        break
-                else:
-                    raise AirflowFailException("Failed to recover job id from log.")
+            try:
+                jobid = get_ddf_job_id_from_log(field)
+            except RuntimeError as error:
+                raise AirflowFailException(str(error)) from error
 
-                while True:
-                    print(f"Polling DDF-pipeine job {jobid}")
-                    poll_cmd = f"sacct -X -j {jobid} --format=State --noheader"
-                    status = subprocess.run(
-                        poll_cmd, shell=True, text=True, capture_output=True
-                    ).stdout.strip()
-                    if (status == "RUNNING") or (status == "PENDING"):
-                        time.sleep(60)
-                    elif status == "COMPLETED":
-                        CURRENT_DB.set_status_finished(
-                            field["target_name"],
-                            "ddf",
-                            field["sas_id_target"],
-                        )
-                        return field
-                    elif (
-                        (status == "FAILED")
-                        or ("TIMEOUT" in status)
-                        or ("CANCELLED" in status)
-                        or ("OUT_OF_MEM" in status)
-                    ):
-                        raise RuntimeError(
-                            f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
-                        )
+            status = poll_ddf_job(jobid, field)
+            if status == "COMPLETED":
+                CURRENT_DB.set_status_finished(
+                    field["target_name"],
+                    "ddf",
+                    field["sas_id_target"],
+                )
+                return field
+
+            if ddf_restart_attempted(field):
+                raise RuntimeError(
+                    f"DDF-pipeline restart for {field['target_name']} {field['sas_id_target']} "
+                    f"failed with status {status}."
+                )
+
+            try:
+                rundir = get_ddf_rundir_from_log(field)
+            except RuntimeError as error:
+                raise AirflowFailException(str(error)) from error
+            launch_ddf_pipeline(field, CURRENT_DB, restart=True, rundir=rundir)
+            return field
         if field["status_ddf"] == PIPELINE_STATUS.finished.value:
             return field
         else:
