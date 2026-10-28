@@ -707,7 +707,7 @@ def ilotss():
     )
     result_prepare_ddf = prepare_ddf(result_vlbi_delay)
     result_ddf = run_ddf_pipeline(result_prepare_ddf)
-    result_prepare_ddf_subtract = prepare_ddf_subtract(result_ddf)
+    result_prepare_ddf_subtract = prepare_ddf_subtract(result_vlbi_delay)
     result_ddf_subtract = run_ddf_subtract(result_prepare_ddf_subtract)
     result_vlbi_dd = run_vlbi_ddcal(result_ddf_subtract)
     result_vlbi_interm_img = run_vlbi_image_intermediate(result_vlbi_dd)
@@ -718,14 +718,9 @@ def ilotss():
     _result_vlbi_facet_img_0p6 = run_vlbi_facet_imaging_0p6(result_vlbi_facet_subtract)
     _result_vlbi_facet_img_0p3 = run_vlbi_facet_imaging_0p3(result_vlbi_facet_subtract)
 
-    (
-        await_approval_delay
-        >> result_prepare_ddf
-        >> result_ddf
-        >> result_prepare_ddf_subtract
-        >> result_ddf_subtract
-        >> result_vlbi_dd
-    )
+    await_approval_delay >> [result_prepare_ddf, result_prepare_ddf_subtract]
+
+    [result_prepare_ddf_subtract, result_ddf] >> result_ddf_subtract >> result_vlbi_dd
 
 
 ilotss()
