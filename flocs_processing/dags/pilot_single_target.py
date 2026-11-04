@@ -16,6 +16,7 @@ import configparser
 import datetime
 import glob
 import io
+import oracledb
 import os
 import pathlib
 import random
@@ -31,9 +32,21 @@ from airflow.sdk import dag, task
 from airflow.providers.standard.sensors.python import PythonSensor
 from airflow.sdk.exceptions import AirflowSkipException
 from airflow.task.trigger_rule import TriggerRule
-from flocs_lta.lta_search import ObservationStager
+try:
+    from flocs_lta.lta_search import ObservationStager
+    from stager_access import (
+        get_surls_requested,
+        get_surls_online,
+        reschedule,
+        get_status,
+    )
+except oracle.OperationalError as e:
+    (error_obj,) = e.args
+    if error_obj.full_code == "DPY-6005":
+        print(
+            "Cannot connect to the LTA. Staging related functionality is not available."
+        )
 from autoPILOT.ilotss.assess_calibrators import assess_and_compare
-from stager_access import get_surls_requested, get_surls_online, reschedule, get_status
 
 if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
     raise RuntimeError(
@@ -193,17 +206,21 @@ def pilot_single_target():
         MAX_RESCHEDULES_CALIBRATOR = 3
         MAX_RESCHEDULES_TARGET = 3
         if field["downloaded"]:
-            obsids = glob.glob(
-                pathlib.Path(DATA_DIR) / field["target_name"] / "target" / "L*"
+            obsids = list(
+                (pathlib.Path(DATA_DIR) / field["target_name"] / "target").glob("L*")
             )
             if len(obsids) > 1:
-                raise NotImplementedError("Cannot process multi-epoch data with this DAG (yet).")
+                raise NotImplementedError(
+                    "Cannot process multi-epoch data with this DAG (yet)."
+                )
             else:
-                actual_sasid = obsids[0].name
+                actual_sasid = obsids[0].name[1:]
                 if field["sas_id_target"] != actual_sasid:
-                    print(f"Updating target SAS id in database {field['sas_id_target']:s} -> {actual_sasid:s}")
+                    print(
+                        f"Updating target SAS id in database {field['sas_id_target']:s} -> {actual_sasid:s}"
+                    )
                 # Slice to strip of the L prefix
-                CURRENT_DB.update_target_sas_id(field["sas_id_target"], actual_sasid[1:])
+                CURRENT_DB.update_target_sas_id(field["sas_id_target"], actual_sasid)
             field["sas_id_target"] = actual_sasid
             return field
         else:
@@ -540,6 +557,7 @@ def pilot_single_target():
 
     @task
     def run_linc_calibrator2(field):
+        print(field)
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if not field["sas_id_calibrator2"]:
             raise AirflowSkipException("Calibrator 2 does not exist, skipping.")

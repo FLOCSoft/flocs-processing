@@ -22,6 +22,7 @@ from flocs_processing.pipeline_runners import (
 
 import configparser
 import datetime
+import oracledb
 import os
 import pathlib
 import random
@@ -34,9 +35,22 @@ from airflow.sdk import dag, task
 from airflow.providers.standard.sensors.python import PythonSensor
 from airflow.sdk.exceptions import AirflowSkipException
 from airflow.task.trigger_rule import TriggerRule
-from flocs_lta.lta_search import ObservationStager
+
+try:
+    from flocs_lta.lta_search import ObservationStager
+    from stager_access import (
+        get_surls_requested,
+        get_surls_online,
+        reschedule,
+        get_status,
+    )
+except oracle.OperationalError as e:
+    (error_obj,) = e.args
+    if error_obj.full_code == "DPY-6005":
+        print(
+            "Cannot connect to the LTA. Staging related functionality is not available."
+        )
 from autoPILOT.ilotss.assess_calibrators import assess_and_compare
-from stager_access import get_surls_requested, get_surls_online, reschedule, get_status
 
 if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
     raise RuntimeError(
