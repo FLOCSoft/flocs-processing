@@ -40,7 +40,7 @@ try:
         reschedule,
         get_status,
     )
-except oracle.OperationalError as e:
+except oracledb.OperationalError as e:
     (error_obj,) = e.args
     if error_obj.full_code == "DPY-6005":
         print(
