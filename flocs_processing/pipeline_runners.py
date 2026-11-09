@@ -102,9 +102,11 @@ def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
                 if "Submitted batch job" in line:
                     jobid = line.strip().split()[-1]
         else:
+            db.set_status_failed(field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"])
             raise RuntimeError("Failed to submit job.")
 
         if not jobid:
+            db.set_status_failed(field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"])
             raise RuntimeError("Failed to retrieve job id")
         else:
             while True:
@@ -127,6 +129,7 @@ def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
                     or ("TIMEOUT" in status)
                     or ("CANCELLED" in status)
                 ):
+                    db.set_status_failed(field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"])
                     raise RuntimeError(
                         f"LINC calibrator for {field['target_name']} {field['sas_id_target']} failed."
                     )
@@ -178,6 +181,7 @@ def run_linc_calibrator_toil(field, calibrator_field: int, db: FlocsDB):
                 field["sas_id_target"],
             )
         else:
+            db.set_status_failed(field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"])
             raise RuntimeError
 
 
@@ -580,6 +584,7 @@ def run_pilot_delay_toil(field, db: FlocsDB, mode="widefield"):
                     field["target_name"], "vlbi_delay", field["sas_id_target"]
                 )
         else:
+            db.set_status_failed(field["target_name"], "vlbi_delay", field["sas_id_target"])
             raise RuntimeError
 
 
