@@ -31,7 +31,7 @@ import subprocess
 import time
 
 from airflow.exceptions import AirflowFailException
-from airflow.sdk import dag, task
+from airflow.sdk import dag, task, get_current_context
 from airflow.providers.standard.sensors.python import PythonSensor
 from airflow.sdk.exceptions import AirflowSkipException
 from airflow.task.trigger_rule import TriggerRule
@@ -141,8 +141,13 @@ def get_approval(field, identifier, needs_approval):
 def ilotss():
     @task
     def get_unprocessed_target():
+        conf = get_current_context()["dag_run"].conf or {}
+        obsid = str(conf.get("sas_id_target") or "")
+        rows = CURRENT_DB.get_db_columns(obsid)
+        if obsid and not rows:
+            raise AirflowFailException(f"Requested target {obsid} is not in the processing database.")
         field = None
-        for dbrow in CURRENT_DB.get_db_columns():
+        for dbrow in rows:
             is_processing = False
             row = dict(dbrow)
             if row["status"] == FIELD_STATUS.downloading.value:
@@ -158,13 +163,21 @@ def ilotss():
                 field = row
                 break
         if not field:
+            if obsid:
+                raise AirflowFailException(f"Requested target {obsid} is already downloading or processing.")
             raise AirflowSkipException("No unprocessed fields found.")
+        if conf.get("target_name") and field["target_name"] != conf["target_name"]:
+            raise AirflowFailException("Requested target name and SAS ID do not match.")
         print(field["target_name"])
         return field
 
     @task.short_circuit
     def check_fields():
-        fields = CURRENT_DB.get_db_columns()
+        conf = get_current_context()["dag_run"].conf or {}
+        obsid = str(conf.get("sas_id_target") or "")
+        fields = CURRENT_DB.get_db_columns(obsid)
+        if obsid and not fields:
+            raise AirflowFailException(f"Requested target {obsid} is not in the processing database.")
         return bool(fields)
 
     @task
@@ -513,9 +526,8 @@ def ilotss():
 
     @task
     def run_linc_target(field):
-        if (field["status_target"] == PIPELINE_STATUS.finished.value) or (
-            field["status_target"] == PIPELINE_STATUS.processing.value
-        ):
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        if field["status_target"] == PIPELINE_STATUS.finished.value:
             return field
         else:
             if CWL_RUNNER_LINC_TARGET == "cwltool":
@@ -532,6 +544,7 @@ def ilotss():
 
     @task(retries=0, retry_delay=datetime.timedelta(seconds=5))
     def run_vlbi_delay(field):
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if field["status_vlbi_delay"] == PIPELINE_STATUS.finished.value:
             return field
         else:
