@@ -2,6 +2,7 @@ import configparser
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import time
 
@@ -1299,7 +1300,7 @@ def run_prepare_ddf(field, db: FlocsDB):
         mses_unaveraged = list(linc_ms_path.glob("*.dp3concat"))
     else:
         print("Found unaveraged data in delay calibration output.")
-    mses_averaged = list(target_ms_path.glob("*_pre-cal.ms"))
+    mses_averaged = [target_ms_path / f"{ms.stem}_pre-cal.ms" for ms in mses_unaveraged]
     if not mses_unaveraged:
         db.set_status_failed(
             field["target_name"],
@@ -1309,9 +1310,12 @@ def run_prepare_ddf(field, db: FlocsDB):
         raise RuntimeError(
             f"No unaveraged input MSes found at {linc_ms_path}/*.dp3concat"
         )
-    if mses_unaveraged and (len(mses_averaged) == len(mses_unaveraged)):
-        print("Appropriate input exists for ddf-pipeline.")
-        return mses_averaged
+    for out_ms in mses_averaged:
+        if out_ms.exists() and not (out_ms / ".flocs-prepared").is_file():
+            raise RuntimeError(
+                f"Cannot reuse {out_ms}: preparation completion is unverified. "
+                "Check the previous job and move the output aside before retrying."
+            )
 
     jobids = []
     averaged_mses = []
@@ -1332,7 +1336,8 @@ def run_prepare_ddf(field, db: FlocsDB):
             print(dp3_cmd)
         else:
             dp3_cmd = f"apptainer exec $CWL_SINGULARITY_CACHE/astronrd_linc_latest.sif DP3 numthreads=2 msin={ms} msout={out_ms} msout.uvwcompression=False  msout.antennacompression=False msout.scalarflags=False msout.storagemanager=Dysco steps=[filter,average] average.timeresolution=8 average.freqresolution=97.64kHz filter.remove=True filter.baseline='[CR]S*&&'"
-        submit_cmd = f'sbatch -A {SLURM_ACCOUNT} -p {SLURM_QUEUE} --time=02:00:00 -c 2 --job-name=dp3_avg_{ms.stem} --wrap="{dp3_cmd}"'
+        dp3_cmd += f" && touch {shlex.quote(str(out_ms / '.flocs-prepared'))}"
+        submit_cmd = f"sbatch -A {SLURM_ACCOUNT} -p {SLURM_QUEUE} --time=02:00:00 -c 2 --job-name=dp3_avg_{ms.stem} --wrap={shlex.quote(dp3_cmd)}"
         print(f"Submitting: {submit_cmd}")
         proc = subprocess.run(submit_cmd, shell=True, text=True, capture_output=True)
         if proc.returncode:
@@ -1353,9 +1358,12 @@ def run_prepare_ddf(field, db: FlocsDB):
                 poll_cmd, shell=True, text=True, capture_output=True
             ).stdout.strip()
             if status == "COMPLETED":
+                if not (out_ms / ".flocs-prepared").is_file():
+                    raise RuntimeError(f"Job {jobid} completed without verified output: {out_ms}")
                 print(f"Job {jobid} completed ({out_ms.name})")
-            elif (
-                (status == "FAILED") or ("TIMEOUT" in status) or ("CANCELLED" in status)
+            elif status.startswith(
+                ("FAILED", "TIMEOUT", "CANCELLED", "OUT_OF_MEMORY", "NODE_FAIL",
+                 "PREEMPTED", "BOOT_FAIL", "DEADLINE", "REVOKED")
             ):
                 raise RuntimeError(
                     f"DP3 averaging job {jobid} failed for {out_ms.name}"
@@ -1367,7 +1375,6 @@ def run_prepare_ddf(field, db: FlocsDB):
         jobids = remaining
         time.sleep(30)
 
-    mses_averaged = list(target_ms_path.glob("*_pre-cal.ms"))
     return mses_averaged
 
 
