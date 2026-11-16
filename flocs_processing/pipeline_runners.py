@@ -1279,9 +1279,8 @@ def run_prepare_ddf(field, db: FlocsDB):
     mses_unaveraged = list(target_ms_path.glob("*.dp3concat"))
     delay_sols = ""
     if not mses_unaveraged:
-        db.set_status_processing(
+        db.set_field_processing(
             field["target_name"],
-            "ddf",
             field["sas_id_target"],
         )
         print(
