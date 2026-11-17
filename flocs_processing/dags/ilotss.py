@@ -1,6 +1,5 @@
 from enum import Enum
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
-from flocs_processing.flocs_processing import FIELD_STATUS
 from flocs_processing.pipeline_runners import (
     get_most_recent_run,
     run_linc_calibrator_cwltool,
@@ -22,11 +21,12 @@ from flocs_processing.pipeline_runners import (
 
 import configparser
 import datetime
+import getpass
+import socket
 import oracledb
 import os
 import pathlib
 import random
-import sqlite3
 import subprocess
 import time
 
@@ -123,59 +123,67 @@ class STAGING_STATUS(Enum):
 
 
 def get_approval(field, identifier, needs_approval):
-    if not needs_approval:
-        return field
-    with sqlite3.connect(DATABASE) as db:
-        db.row_factory = sqlite3.Row
-        cursor = db.cursor()
-        columns = f"sas_id_target,status_{identifier}"
-        field = cursor.execute(
-            f"select {columns} from {TABLE_NAME} where sas_id_target=='{field['sas_id_target']}'"
-        ).fetchall()
-        status = field[0][f"status_{identifier}"]
-    if status == PIPELINE_STATUS.finished.value:
-        return field
+    if not needs_approval or CURRENT_DB.get_step_status(
+        field["field_name"], identifier, field["target_sas_id"]
+    ) == PIPELINE_STATUS.finished.value:
+        return dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
 
 
-@dag(max_active_runs=4)
+def field_failed(context):
+    run_id = f"{context['dag'].dag_id}:{context['dag_run'].run_id}"
+    field = CURRENT_DB.get_run_field(run_id)
+    if field:
+        CURRENT_DB.set_field_failed(
+            field["field_name"], field["target_sas_id"],
+            str(context.get("exception") or "DAG run failed."), run_id=run_id,
+        )
+
+
+def step_finished(field, identifier):
+    if CURRENT_DB.is_step_finished(field["field_name"], identifier, field["target_sas_id"]):
+        return True
+    if CURRENT_DB.is_step_processing(field["field_name"], identifier, field["target_sas_id"]):
+        raise AirflowFailException(
+            f"{identifier} may still be running; check the existing job before retrying."
+        )
+    return False
+
+
+@dag(max_active_runs=4, on_failure_callback=field_failed)
 def ilotss():
     @task
     def get_unprocessed_target():
-        conf = get_current_context()["dag_run"].conf or {}
-        obsid = str(conf.get("sas_id_target") or "")
-        rows = CURRENT_DB.get_db_columns(obsid)
-        if obsid and not rows:
-            raise AirflowFailException(f"Requested target {obsid} is not in the processing database.")
-        field = None
+        context = get_current_context()
+        conf = context["dag_run"].conf or {}
+        obsid = str(conf.get("target_sas_id") or "")
+        run_id = f"{context['dag'].dag_id}:{context['dag_run'].run_id}"
+        owned = CURRENT_DB.get_run_field(run_id)
+        rows = [owned] if owned else CURRENT_DB.get_db_columns(obsid, intent="vlbi-widefield")
         for dbrow in rows:
-            is_processing = False
             row = dict(dbrow)
-            if row["status"] == FIELD_STATUS.downloading.value:
-                is_processing = True
-                break
-            status_keys = filter(lambda x: x.startswith("status_"), row.keys())
-            for key in status_keys:
-                if row[key] == PIPELINE_STATUS.processing.value:
-                    is_processing = True
-                    break
-            if not is_processing:
-                # Only select a field if nothing is processing it.
-                field = row
-                break
-        if not field:
-            if obsid:
-                raise AirflowFailException(f"Requested target {obsid} is already downloading or processing.")
-            raise AirflowSkipException("No unprocessed fields found.")
-        if conf.get("target_name") and field["target_name"] != conf["target_name"]:
-            raise AirflowFailException("Requested target name and SAS ID do not match.")
-        print(field["target_name"])
-        return field
+            if conf.get("field_name") and row["field_name"] != conf["field_name"]:
+                raise AirflowFailException("Requested field name and SAS ID do not match.")
+            field = CURRENT_DB.claim_field(
+                row["field_name"], row["target_sas_id"], run_id,
+                pipeline="vlbi-widefield", cluster=parser["DEFAULT"].get("PROCESSING_CLUSTER"),
+                user=getpass.getuser(), host=socket.gethostname(),
+                input_location=row["input_location"] or os.path.join(DATA_DIR, row["field_name"]),
+                work_directory=row["work_directory"] or PROCESSING_DIR,
+                output_location=row["output_location"] or os.path.join(OUTPUT_DIR, row["field_name"]),
+            )
+            if field:
+                return field
+        if obsid:
+            raise AirflowFailException(f"Requested target {obsid} is unavailable for this workflow.")
+        raise AirflowSkipException("No unprocessed fields found.")
 
     @task.short_circuit
     def check_fields():
-        conf = get_current_context()["dag_run"].conf or {}
-        obsid = str(conf.get("sas_id_target") or "")
-        fields = CURRENT_DB.get_db_columns(obsid)
+        context = get_current_context()
+        conf = context["dag_run"].conf or {}
+        obsid = str(conf.get("target_sas_id") or "")
+        run_id = f"{context['dag'].dag_id}:{context['dag_run'].run_id}"
+        fields = CURRENT_DB.get_run_field(run_id) or CURRENT_DB.get_db_columns(obsid, intent="vlbi-widefield")
         if obsid and not fields:
             raise AirflowFailException(f"Requested target {obsid} is not in the processing database.")
         return bool(fields)
@@ -185,49 +193,49 @@ def ilotss():
         ACCEPTED_ONLINE_FRACTION = 0.95
         MAX_RESCHEDULES_CALIBRATOR = 3
         MAX_RESCHEDULES_TARGET = 3
-        if field["downloaded"]:
+        if CURRENT_DB.is_step_finished(field["field_name"], "download", field["target_sas_id"]):
             return field
         else:
             CURRENT_DB.set_field_downloading(
-                field["target_name"], field["sas_id_target"]
+                field["field_name"], field["target_sas_id"]
             )
             stage_calibrators = False
             num_downloaded_calib1 = 0
             num_downloaded_calib2 = 0
             num_staged_calib = 0
             num_staged_targ = 0
-            if os.path.exists(f"srms_{field['sas_id_target']}_calibrators.txt"):
+            if os.path.exists(f"srms_{field['target_sas_id']}_calibrators.txt"):
                 print("Found srm file; counting calibrator SRMs.")
                 out = subprocess.check_output(
-                    f"wc -l srms_{field['sas_id_target']}_calibrators.txt | cut -f 1 -d ' '",
+                    f"wc -l srms_{field['target_sas_id']}_calibrators.txt | cut -f 1 -d ' '",
                     text=True,
                     shell=True,
                 )
                 num_staged_calib = int(out.strip())
 
-            if os.path.exists(f"srms_{field['sas_id_target']}.txt"):
+            if os.path.exists(f"srms_{field['target_sas_id']}.txt"):
                 print("Found srm file; counting target SRMs.")
                 out = subprocess.check_output(
-                    f"wc -l srms_{field['sas_id_target']}.txt | cut -f 1 -d ' '",
+                    f"wc -l srms_{field['target_sas_id']}.txt | cut -f 1 -d ' '",
                     text=True,
                     shell=True,
                 )
                 num_staged_targ = int(out.strip())
 
-            if ("sas_id_target" not in field) or (not field["sas_id_target"]):
+            if ("target_sas_id" not in field) or (not field["target_sas_id"]):
                 raise AirflowFailException(
-                    f"No target SAS ID in database for field {field['target_name']}"
+                    f"No target SAS ID in database for field {field['field_name']}"
                 )
 
-            ms_folder = f"L{field['sas_id_target']}"
+            ms_folder = f"L{field['target_sas_id']}"
             calibrator_full_path = os.path.join(
-                DATA_DIR, field["target_name"], "target", ms_folder
+                field["input_location"], "target", ms_folder
             )
             if os.path.exists(calibrator_full_path):
-                if field["sas_id_calibrator1"]:
-                    ms_folder = f"L{field['sas_id_calibrator1']}"
+                if field["calibrator1_sas_id"]:
+                    ms_folder = f"L{field['calibrator1_sas_id']}"
                     cal1_full_path = os.path.join(
-                        DATA_DIR, field["target_name"], "calibrator", ms_folder
+                        field["input_location"], "calibrator", ms_folder
                     )
                     if os.path.exists(cal1_full_path):
                         num_downloaded_calib1 = len(
@@ -236,10 +244,10 @@ def ilotss():
                     else:
                         stage_calibrators = True
 
-                if field["sas_id_calibrator2"]:
-                    ms_folder = f"L{field['sas_id_calibrator2']}"
+                if field["calibrator2_sas_id"]:
+                    ms_folder = f"L{field['calibrator2_sas_id']}"
                     cal2_full_path = os.path.join(
-                        DATA_DIR, field["target_name"], "calibrator", ms_folder
+                        field["input_location"], "calibrator", ms_folder
                     )
                     if os.path.exists(cal2_full_path):
                         num_downloaded_calib2 = len(
@@ -266,9 +274,9 @@ def ilotss():
                 calibrator_downloaded = False
 
             stage_target = False
-            ms_folder = f"L{field['sas_id_target']}"
+            ms_folder = f"L{field['target_sas_id']}"
             target_full_path = os.path.join(
-                DATA_DIR, field["target_name"], "target", ms_folder
+                field["input_location"], "target", ms_folder
             )
             if os.path.exists(target_full_path):
                 num_downloaded_targ = len(
@@ -291,11 +299,11 @@ def ilotss():
                 target_downloaded = False
 
             if stage_calibrators or stage_target:
-                print(f"Field {field['sas_id_target']} is not downloaded.")
+                print(f"Field {field['target_sas_id']} is not downloaded.")
                 stager = ObservationStager(get_surls=True)
                 stager.find_observation_by_sasid(
                     "ALL",
-                    field["sas_id_target"],
+                    field["target_sas_id"],
                     None,
                     120,
                     168,
@@ -306,11 +314,11 @@ def ilotss():
                 if stage_target:
                     stage_id_target = stager.stage_target()
             else:
+                CURRENT_DB.set_field_downloaded(field["field_name"], field["target_sas_id"])
                 return field
 
             calibrator_staged = False
             target_staged = False
-            calibrator_downloaded = False
             schedule_tries_cal = 0
             schedule_tries_tar = 0
             while True:
@@ -333,16 +341,16 @@ def ilotss():
                         calibrator_staged = True
                     if calibrator_staged and not calibrator_downloaded:
                         dl_path = os.path.join(
-                            DATA_DIR, field["target_name"], "calibrator"
+                            field["input_location"], "calibrator"
                         )
                         cmd = f"flocs-lta download --outdir {dl_path} {stage_id_calibrators}"
                         with (
                             open(
-                                f"log_download_calibrators_{field['target_name']}.txt",
+                                f"log_download_calibrators_{field['field_name']}.txt",
                                 "w+",
                             ) as f_out,
                             open(
-                                f"log_download_calibrators_{field['target_name']}_err.txt",
+                                f"log_download_calibrators_{field['field_name']}_err.txt",
                                 "w+",
                             ) as f_err,
                         ):
@@ -369,15 +377,15 @@ def ilotss():
                     ):
                         target_staged = True
                     if target_staged and not target_downloaded:
-                        dl_path = os.path.join(DATA_DIR, field["target_name"], "target")
+                        dl_path = os.path.join(field["input_location"], "target")
                         cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
                         with (
                             open(
-                                f"log_download_target_{field['target_name']}.txt",
+                                f"log_download_target_{field['field_name']}.txt",
                                 "w+",
                             ) as f_out,
                             open(
-                                f"log_download_target_{field['target_name']}_err.txt",
+                                f"log_download_target_{field['field_name']}_err.txt",
                                 "w+",
                             ) as f_err,
                         ):
@@ -385,16 +393,13 @@ def ilotss():
                                 cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                             )
                             if not proc.returncode:
-                                CURRENT_DB.set_status_downloaded(
-                                    field["target_name"],
-                                    field["sas_id_target"],
-                                )
                                 target_downloaded = True
                             else:
                                 raise RuntimeError
                 if calibrator_downloaded and target_downloaded:
+                    CURRENT_DB.set_field_downloaded(field["field_name"], field["target_sas_id"])
                     CURRENT_DB.set_field_processing(
-                        field["target_name"], field["sas_id_target"]
+                        field["field_name"], field["target_sas_id"]
                     )
                     break
                 time.sleep(60)
@@ -402,12 +407,12 @@ def ilotss():
 
     @task
     def run_linc_calibrator1(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if not field["sas_id_calibrator1"]:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if not field["calibrator1_sas_id"]:
             raise AirflowSkipException("Calibrator 1 does not exist, skipping.")
-        if field["status_calibrator1"] == PIPELINE_STATUS.finished.value:
+        if step_finished(field, "calibrator1"):
             print(
-                f"Flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']} already processed."
+                f"Flux density calibrator {field['calibrator1_sas_id']} for observation {field['field_name']} {field['target_sas_id']} already processed."
             )
             return field
         else:
@@ -421,12 +426,12 @@ def ilotss():
 
     @task
     def run_linc_calibrator2(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if not field["sas_id_calibrator2"]:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if not field["calibrator2_sas_id"]:
             raise AirflowSkipException("Calibrator 2 does not exist, skipping.")
-        if field["status_calibrator2"] == PIPELINE_STATUS.finished.value:
+        if step_finished(field, "calibrator2"):
             print(
-                f"Flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']} already processed."
+                f"Flux density calibrator {field['calibrator2_sas_id']} for observation {field['field_name']} {field['target_sas_id']} already processed."
             )
             return field
         else:
@@ -439,21 +444,33 @@ def ilotss():
         return field
 
     @task(trigger_rule=TriggerRule.ALL_DONE)
-    def select_best_calibrator(result1, result2):
+    def select_best_calibrator(field, result1, result2):
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        result1 = field if field["calibrator1_sas_id"] and CURRENT_DB.is_step_finished(
+            field["field_name"], "calibrator1", field["target_sas_id"]
+        ) else None
+        result2 = field if field["calibrator2_sas_id"] and CURRENT_DB.is_step_finished(
+            field["field_name"], "calibrator2", field["target_sas_id"]
+        ) else None
+        selected = field["selected_calibrator_sas_id"]
+        if (result1 and selected == field["calibrator1_sas_id"]) or (
+            result2 and selected == field["calibrator2_sas_id"]
+        ):
+            return field
         if result1 and (not result2):
             print("Only cal 1 succeeded, continuing with that")
             CURRENT_DB.set_final_calibrator(
-                result1["target_name"],
-                result1["sas_id_target"],
-                result1["sas_id_calibrator1"],
+                result1["field_name"],
+                result1["target_sas_id"],
+                result1["calibrator1_sas_id"],
             )
             return result1
         elif (not result1) and result2:
             print("Only cal 2 succeeded, continuing with that")
             CURRENT_DB.set_final_calibrator(
-                result2["target_name"],
-                result2["sas_id_target"],
-                result2["sas_id_calibrator2"],
+                result2["field_name"],
+                result2["target_sas_id"],
+                result2["calibrator2_sas_id"],
             )
             return result2
         elif result1 and result2:
@@ -465,29 +482,29 @@ def ilotss():
                 )
                 if cal == 1:
                     CURRENT_DB.set_final_calibrator(
-                        result1["target_name"],
-                        result1["sas_id_target"],
-                        result1["sas_id_calibrator1"],
+                        result1["field_name"],
+                        result1["target_sas_id"],
+                        result1["calibrator1_sas_id"],
                     )
                     return result1
                 elif cal == 2:
                     CURRENT_DB.set_final_calibrator(
-                        result2["target_name"],
-                        result2["sas_id_target"],
-                        result2["sas_id_calibrator2"],
+                        result2["field_name"],
+                        result2["target_sas_id"],
+                        result2["calibrator2_sas_id"],
                     )
                     return result2
             else:
-                outdir = os.path.join(OUTPUT_DIR, result1["target_name"])
+                outdir = result1["output_location"]
                 calibrator1_path = get_most_recent_run(
-                    outdir, result1["sas_id_calibrator1"], "LINC_calibrator"
+                    outdir, result1["calibrator1_sas_id"], "LINC_calibrator"
                 )
                 calibrator1_solutions = (
                     calibrator1_path / "results_LINC_calibrator" / "cal_solutions.h5"
                 )
 
                 calibrator2_path = get_most_recent_run(
-                    outdir, result2["sas_id_calibrator2"], "LINC_calibrator"
+                    outdir, result2["calibrator2_sas_id"], "LINC_calibrator"
                 )
                 calibrator2_solutions = (
                     calibrator2_path / "results_LINC_calibrator" / "cal_solutions.h5"
@@ -508,17 +525,17 @@ def ilotss():
                     case True:
                         print("Best score for calibrator1")
                         CURRENT_DB.set_final_calibrator(
-                            result1["target_name"],
-                            result1["sas_id_target"],
-                            result1["sas_id_calibrator1"],
+                            result1["field_name"],
+                            result1["target_sas_id"],
+                            result1["calibrator1_sas_id"],
                         )
                         return result1
                     case False:
                         print("Best score for calibrator2")
                         CURRENT_DB.set_final_calibrator(
-                            result2["target_name"],
-                            result2["sas_id_target"],
-                            result2["sas_id_calibrator2"],
+                            result2["field_name"],
+                            result2["target_sas_id"],
+                            result2["calibrator2_sas_id"],
                         )
                         return result2
         else:
@@ -526,8 +543,8 @@ def ilotss():
 
     @task
     def run_linc_target(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_target"] == PIPELINE_STATUS.finished.value:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if step_finished(field, "target"):
             return field
         else:
             if CWL_RUNNER_LINC_TARGET == "cwltool":
@@ -544,8 +561,8 @@ def ilotss():
 
     @task(retries=0, retry_delay=datetime.timedelta(seconds=5))
     def run_vlbi_delay(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_delay"] == PIPELINE_STATUS.finished.value:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if step_finished(field, "vlbi_delay"):
             return field
         else:
             if CWL_RUNNER_PILOT_DELAY == "cwltool":
@@ -558,16 +575,16 @@ def ilotss():
 
     @task
     def run_ddf_pipeline(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        logsdir = os.path.join(OUTPUT_DIR, field["target_name"], "logs")
-        if field["status_ddf"] == PIPELINE_STATUS.processing.value:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        logsdir = os.path.join(field["output_location"], "logs")
+        if CURRENT_DB.is_step_processing(field["field_name"], "ddf", field["target_sas_id"]):
             print(
-                f"ddf-pipeline for {field['target_name']} {field['sas_id_target']} should be running, attempting to resume polling..."
+                f"ddf-pipeline for {field['field_name']} {field['target_sas_id']} should be running, attempting to resume polling..."
             )
             with open(
                 os.path.join(
                     logsdir,
-                    f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}.txt",
+                    f"log_DDF-pipeline_{field['field_name']}_{field['target_sas_id']}.txt",
                 ),
                 "r",
             ) as f_out:
@@ -589,9 +606,9 @@ def ilotss():
                         time.sleep(60)
                     elif status == "COMPLETED":
                         CURRENT_DB.set_status_finished(
-                            field["target_name"],
+                            field["field_name"],
                             "ddf",
-                            field["sas_id_target"],
+                            field["target_sas_id"],
                         )
                         return field
                     elif (
@@ -600,10 +617,11 @@ def ilotss():
                         or ("CANCELLED" in status)
                         or ("OUT_OF_MEM" in status)
                     ):
+                        CURRENT_DB.set_status_failed(field["field_name"], "ddf", field["target_sas_id"])
                         raise RuntimeError(
-                            f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
+                            f"DDF-pipeline for {field['field_name']} {field['target_sas_id']} failed."
                         )
-        if field["status_ddf"] == PIPELINE_STATUS.finished.value:
+        if step_finished(field, "ddf"):
             return field
         else:
             launch_ddf_pipeline(field, CURRENT_DB)
@@ -611,8 +629,8 @@ def ilotss():
 
     @task
     def run_ddf_subtract(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_ddf_subtract"] == PIPELINE_STATUS.finished.value:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if step_finished(field, "vlbi_ddf_subtract"):
             return field
         else:
             run_pilot_process_ddf_toil(field, CURRENT_DB)
@@ -620,13 +638,8 @@ def ilotss():
 
     @task
     def run_vlbi_ddcal(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_dd"] == PIPELINE_STATUS.processing.value:
-            raise AirflowFailException(
-                "DD calibration is marked as processing; check the existing workflow "
-                "and recover it before retrying."
-            )
-        if field["status_vlbi_dd"] == PIPELINE_STATUS.finished.value:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if step_finished(field, "vlbi_dd"):
             return field
         else:
             if CWL_RUNNER_PILOT_DDCAL == "cwltool":
@@ -639,6 +652,8 @@ def ilotss():
 
     @task
     def prepare_ddf(field):
+        if CURRENT_DB.is_step_processing(field["field_name"], "prepare_ddf", field["target_sas_id"]):
+            raise AirflowFailException("DDF preparation may still be running; check the existing jobs before retrying.")
         mses_averaged = run_prepare_ddf(field, CURRENT_DB)
         if mses_averaged:
             return field
@@ -647,6 +662,8 @@ def ilotss():
 
     @task
     def prepare_ddf_subtract(field):
+        if CURRENT_DB.is_step_processing(field["field_name"], "prepare_ddf_subtract", field["target_sas_id"]):
+            raise AirflowFailException("DDF subtraction preparation may still be running; check the existing jobs before retrying.")
         mses_delay_corrected = run_prepare_ddf_subtract(field, CURRENT_DB)
         if mses_delay_corrected:
             return field
@@ -655,8 +672,8 @@ def ilotss():
 
     @task
     def run_vlbi_image_intermediate(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_intermediate_img"] == PIPELINE_STATUS.finished.value:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if step_finished(field, "vlbi_intermediate_img"):
             return field
         else:
             run_pilot_intermediate_image_toil(field, CURRENT_DB)
@@ -664,8 +681,8 @@ def ilotss():
 
     @task
     def run_vlbi_facet_subtract(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_facet_subtract"] == PIPELINE_STATUS.finished.value:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if step_finished(field, "vlbi_facet_subtract"):
             return field
         else:
             run_pilot_facet_subtract_toil(field, CURRENT_DB)
@@ -673,8 +690,8 @@ def ilotss():
 
     @task
     def run_vlbi_facet_imaging_6p0(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished.value:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if step_finished(field, "vlbi_facet_imaging_6.0"):
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=6.0)
@@ -682,8 +699,8 @@ def ilotss():
 
     @task
     def run_vlbi_facet_imaging_3p0(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished.value:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if step_finished(field, "vlbi_facet_imaging_3.0"):
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=3.0)
@@ -691,8 +708,8 @@ def ilotss():
 
     @task
     def run_vlbi_facet_imaging_1p5(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished.value:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if step_finished(field, "vlbi_facet_imaging_1.5"):
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=1.5)
@@ -700,8 +717,8 @@ def ilotss():
 
     @task
     def run_vlbi_facet_imaging_0p6(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished.value:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if step_finished(field, "vlbi_facet_imaging_0.6"):
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=0.6)
@@ -709,11 +726,25 @@ def ilotss():
 
     @task
     def run_vlbi_facet_imaging_0p3(field):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_facet_imaging"] == PIPELINE_STATUS.finished.value:
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        if step_finished(field, "vlbi_facet_imaging_0.3"):
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=0.3)
+        return field
+
+    @task
+    def finish_field(field):
+        for resolution in (6.0, 3.0, 1.5, 0.6, 0.3):
+            if not CURRENT_DB.is_step_finished(
+                field["field_name"], f"vlbi_facet_imaging_{resolution}", field["target_sas_id"]
+            ):
+                raise AirflowFailException(f"Imaging at {resolution} arcsec has not finished.")
+        context = get_current_context()
+        CURRENT_DB.set_field_finished(
+            field["field_name"], field["target_sas_id"],
+            run_id=f"{context['dag'].dag_id}:{context['dag_run'].run_id}",
+        )
         return field
 
     proceed = check_fields()
@@ -721,7 +752,7 @@ def ilotss():
     field = download_field(get_field)
     result_cal1 = run_linc_calibrator1(field)
     result_cal2 = run_linc_calibrator2(field)
-    best_cal = select_best_calibrator(result_cal1, result_cal2)
+    best_cal = select_best_calibrator(field, result_cal1, result_cal2)
     result_targ = run_linc_target(best_cal)
     linc_is_valid = validate_linc_target(result_targ)
     result_vlbi_delay = run_vlbi_delay(linc_is_valid)
@@ -747,6 +778,13 @@ def ilotss():
     _result_vlbi_facet_img_1p5 = run_vlbi_facet_imaging_1p5(result_vlbi_facet_subtract)
     _result_vlbi_facet_img_0p6 = run_vlbi_facet_imaging_0p6(result_vlbi_facet_subtract)
     _result_vlbi_facet_img_0p3 = run_vlbi_facet_imaging_0p3(result_vlbi_facet_subtract)
+
+    finished = finish_field(result_vlbi_facet_subtract)
+    [
+        _result_vlbi_facet_img_6p0, _result_vlbi_facet_img_3p0,
+        _result_vlbi_facet_img_1p5, _result_vlbi_facet_img_0p6,
+        _result_vlbi_facet_img_0p3,
+    ] >> finished
 
     (
         await_approval_delay

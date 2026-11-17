@@ -7,7 +7,6 @@ from airflow.sdk import dag, task
 from airflow.sdk.exceptions import AirflowSkipException
 
 from flocs_processing.db_utils import FlocsDB
-from flocs_processing.flocs_processing import FIELD_STATUS, PIPELINE_STATUS
 
 
 if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
@@ -33,20 +32,12 @@ CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
 def pilot_single_target_dispatcher():
     @task.short_circuit
     def check_fields():
-        return bool(CURRENT_DB.get_db_columns(intent="single-target"))
+        return bool(CURRENT_DB.get_db_columns(intent="vlbi-single-target"))
 
     @task
     def get_unprocessed_field():
-        for dbrow in CURRENT_DB.get_db_columns(intent="single-target"):
+        for dbrow in CURRENT_DB.get_db_columns(intent="vlbi-single-target"):
             field = dict(dbrow)
-            if field["status"] == FIELD_STATUS.downloading.value:
-                continue
-            if any(
-                value == PIPELINE_STATUS.processing.value
-                for key, value in field.items()
-                if key.startswith("status_")
-            ):
-                continue
             return field
         raise AirflowSkipException("No unprocessed fields found.")
 
@@ -54,16 +45,16 @@ def pilot_single_target_dispatcher():
     def launch_field(field):
         date = datetime.now().isoformat()
         run_id = (
-            f"pilot__single_target__{field['target_name'].replace(' ', '_')}"
-            f"__{field['sas_id_target']}"
+            f"pilot__single_target__{field['field_name'].replace(' ', '_')}"
+            f"__{field['target_sas_id']}"
             f"__{date}"
         )
         raise DagRunTriggerException(
             trigger_dag_id="pilot_single_target",
             dag_run_id=run_id,
             conf={
-                "target_name": field["target_name"],
-                "sas_id_target": field["sas_id_target"],
+                "field_name": field["field_name"],
+                "target_sas_id": field["target_sas_id"],
             },
             logical_date=None,
             reset_dag_run=False,

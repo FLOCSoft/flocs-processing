@@ -16,16 +16,24 @@ logger = structlog.getLogger()
 
 PIPELINES = Literal[
     "all",
+    "download",
     "calibrator1",
     "calibrator2",
     "target",
     "vlbi_delay",
+    "prepare_ddf",
     "ddf",
+    "prepare_ddf_subtract",
     "vlbi_ddf_subtract",
     "vlbi_dd",
     "vlbi_intermediate_img",
     "vlbi_facet_subtract",
     "vlbi_facet_imaging",
+    "vlbi_facet_imaging_6.0",
+    "vlbi_facet_imaging_3.0",
+    "vlbi_facet_imaging_1.5",
+    "vlbi_facet_imaging_0.6",
+    "vlbi_facet_imaging_0.3",
 ]
 
 
@@ -73,29 +81,46 @@ def create_database(
     table_name: Annotated[
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
-    pipelines: Annotated[list[str], Parameter(help="", consume_multiple=True)] = [
-        "linc"
-    ],
+    pipelines: Annotated[
+        Literal["vlbi-widefield", "vlbi-single-target"],
+        Parameter(help="Pipeline this database will process."),
+    ] = "vlbi-widefield",
 ):
-    pipeline_str = ",".join(pipelines)
-    pipelines = list(map(str.lower, pipelines))
-    dbstr = f"create table {table_name}(target_name text default NULL, pipelines text default '{pipeline_str}', priority int default 0, status text default '{FIELD_STATUS.nothing.value}', downloaded bit default 0"
-
-    if "linc" in pipelines:
-        dbstr += f", sas_id_calibrator1 text default NULL, sas_id_calibrator2 text default NULL, sas_id_calibrator_final text default NULL, sas_id_target text primary key default NULL, status_calibrator1 smallint default {PIPELINE_STATUS.nothing.value}, status_calibrator2 smallint default {PIPELINE_STATUS.nothing.value}, status_target smallint default {PIPELINE_STATUS.nothing.value}"
-    if "ddf-pipeline" in pipelines:
-        dbstr += f", status_ddf smallint default {PIPELINE_STATUS.nothing.value}"
-    if "vlbi-delay-widefield" in pipelines:
-        dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_ddf_subtract smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_intermediate_img smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_facet_subtract smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_facet_imaging smallint default {PIPELINE_STATUS.nothing.value}"
-    if "vlbi-delay-single-target" in pipelines:
-        dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
-    dbstr += ");"
+    dbstr = f"""CREATE TABLE {table_name} (
+        field_name TEXT NOT NULL,
+        target_sas_id TEXT PRIMARY KEY NOT NULL,
+        project_code TEXT,
+        observation_date TEXT,
+        ra_deg REAL,
+        dec_deg REAL,
+        integration_hours REAL,
+        number_subbands INTEGER,
+        freq_min_mhz REAL,
+        freq_max_mhz REAL,
+        frequency_resolution_hz REAL,
+        time_resolution_s REAL,
+        nr_international INTEGER,
+        elevation_mean_deg REAL,
+        calibrator1_sas_id TEXT,
+        calibrator2_sas_id TEXT,
+        selected_calibrator_sas_id TEXT,
+        selected_delay_calibrator TEXT,
+        pipelines TEXT NOT NULL DEFAULT '{pipelines}',
+        priority INTEGER NOT NULL DEFAULT 0,
+        processing_step TEXT NOT NULL DEFAULT 'pending',
+        processing_status TEXT NOT NULL DEFAULT 'queued',
+        processing_start_time TEXT,
+        processing_end_time TEXT,
+        processing_cluster TEXT,
+        processing_user TEXT,
+        processing_host TEXT,
+        workflow_run_id TEXT,
+        last_updated_at TEXT,
+        input_location TEXT,
+        work_directory TEXT,
+        output_location TEXT,
+        last_error TEXT
+    );"""
 
     cmd = ["sqlite3", dbname, dbstr]
     print(f"Creating table via: {' '.join(cmd)}")
@@ -123,20 +148,27 @@ def add_field(
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
     pipelines: Annotated[
-        str, Parameter(help="Pipelines this field needs to be processed with.")
-    ] = "",
+        Optional[Literal["vlbi-widefield", "vlbi-single-target"]],
+        Parameter(help="Pipeline this field needs to be processed with."),
+    ] = None,
 ):
-    dbstr = f"insert into {table_name} (target_name"
+    dbstr = f"insert into {table_name} (field_name"
     if len(sas_id_calibrators) == 1:
-        dbstr += ", sas_id_calibrator1"
+        dbstr += ", calibrator1_sas_id"
     if len(sas_id_calibrators) == 2:
-        dbstr += ", sas_id_calibrator1, sas_id_calibrator2"
-    dbstr += f", sas_id_target) values ('{field_name}', "
+        dbstr += ", calibrator1_sas_id, calibrator2_sas_id"
+    dbstr += ", target_sas_id"
+    if pipelines:
+        dbstr += ", pipelines"
+    dbstr += f") values ('{field_name}', "
     if len(sas_id_calibrators) == 1:
         dbstr += f"'{sas_id_calibrators[0]}', "
     if len(sas_id_calibrators) == 2:
         dbstr += f"'{sas_id_calibrators[0]}', '{sas_id_calibrators[1]}', "
-    dbstr += f"'{sas_id_target}')"
+    dbstr += f"'{sas_id_target}'"
+    if pipelines:
+        dbstr += f", '{pipelines}'"
+    dbstr += ")"
 
     cmd = ["sqlite3", dbname, dbstr]
     print(f"Adding field {field_name} to {table_name} via: {' '.join(cmd)}")
@@ -203,34 +235,24 @@ def update_pipeline_status(
 ):
     db = FlocsDB(dbname=dbname, db_table=table_name)
     if pipeline == "all":
-        p_list = list(get_args(PIPELINES))
-        p_list.remove("all")
-        for p in p_list:
-            logger.info(f"Setting pipeline {p} to status {set_status}")
-            match set_status:
-                case "nothing":
-                    db.set_status_nothing(field_name, p, sas_id_target)
-                case "downloaded":
-                    db.set_status_downloaded(field_name, p, sas_id_target)
-                case "processing":
-                    db.set_status_processing(field_name, p, sas_id_target)
-                case "failed":
-                    db.set_status_failed(field_name, p, sas_id_target)
-                case "success":
-                    db.set_status_finished(field_name, p, sas_id_target)
+        p_list = [p for p in get_args(PIPELINES) if p not in {"all", "vlbi_facet_imaging"}]
+    elif pipeline == "vlbi_facet_imaging":
+        p_list = [p for p in get_args(PIPELINES) if p.startswith("vlbi_facet_imaging_")]
     else:
-        logger.info(f"Setting pipeline {pipeline} to status {set_status}")
+        p_list = [pipeline]
+    for p in p_list:
+        logger.info(f"Setting pipeline {p} to status {set_status}")
         match set_status:
             case "nothing":
-                db.set_status_nothing(field_name, pipeline, sas_id_target)
+                db.set_status_nothing(field_name, p, sas_id_target)
             case "downloaded":
-                db.set_status_downloaded(field_name, pipeline, sas_id_target)
+                db.set_status_downloaded(field_name, p, sas_id_target)
             case "processing":
-                db.set_status_processing(field_name, pipeline, sas_id_target)
+                db.set_status_processing(field_name, p, sas_id_target)
             case "failed":
-                db.set_status_failed(field_name, pipeline, sas_id_target)
+                db.set_status_failed(field_name, p, sas_id_target)
             case "success":
-                db.set_status_finished(field_name, pipeline, sas_id_target)
+                db.set_status_finished(field_name, p, sas_id_target)
 
 
 @app.command()
