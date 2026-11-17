@@ -1,6 +1,7 @@
 from enum import Enum
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
 from flocs_processing.pipeline_runners import (
+    check_target_subbands,
     get_most_recent_run,
     run_linc_calibrator_cwltool,
     run_linc_calibrator_toil,
@@ -193,7 +194,12 @@ def ilotss():
         ACCEPTED_ONLINE_FRACTION = 0.95
         MAX_RESCHEDULES_CALIBRATOR = 3
         MAX_RESCHEDULES_TARGET = 3
+        minfreq = 120 if field["freq_min_mhz"] is None else field["freq_min_mhz"]
+        maxfreq = 168 if field["freq_max_mhz"] is None else field["freq_max_mhz"]
+        if minfreq >= maxfreq:
+            raise AirflowFailException("freq_min_mhz must be less than freq_max_mhz.")
         if CURRENT_DB.is_step_finished(field["field_name"], "download", field["target_sas_id"]):
+            check_target_subbands(field)
             return field
         else:
             CURRENT_DB.set_field_downloading(
@@ -305,15 +311,21 @@ def ilotss():
                     "ALL",
                     field["target_sas_id"],
                     None,
-                    120,
-                    168,
+                    minfreq,
+                    maxfreq,
                 )
+                expected = field["number_subbands"]
+                if expected is not None and len(stager.target_uris) != expected:
+                    raise AirflowFailException(
+                        f"Expected {expected} target subbands, found {len(stager.target_uris)} in the selected frequency range."
+                    )
                 if stage_calibrators:
                     stager.find_nearest_calibrators(2, 120, 168)
                     stage_id_calibrators = stager.stage_calibrators()
                 if stage_target:
                     stage_id_target = stager.stage_target()
             else:
+                check_target_subbands(field)
                 CURRENT_DB.set_field_downloaded(field["field_name"], field["target_sas_id"])
                 return field
 
@@ -397,6 +409,7 @@ def ilotss():
                             else:
                                 raise RuntimeError
                 if calibrator_downloaded and target_downloaded:
+                    check_target_subbands(field)
                     CURRENT_DB.set_field_downloaded(field["field_name"], field["target_sas_id"])
                     CURRENT_DB.set_field_processing(
                         field["field_name"], field["target_sas_id"]

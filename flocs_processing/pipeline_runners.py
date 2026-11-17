@@ -64,6 +64,20 @@ def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.
         raise RuntimeError(f"No {pipeline} run for {sas_id} found")
 
 
+def check_target_subbands(field):
+    expected = field.get("number_subbands")
+    if expected is None:
+        return
+    input_root = field.get("input_location") or os.path.join(DATA_DIR, field["field_name"])
+    target = pathlib.Path(input_root) / "target" / f"L{field['target_sas_id']}"
+    actual = sum(ms.is_dir() for ms in target.glob("*.MS"))
+    if actual != expected:
+        raise AirflowFailException(
+            f"Expected {expected} target subband MSes in {target}, found {actual}. "
+            "Use an input directory containing only the selected subbands."
+        )
+
+
 def get_delay_solution(field, db, outdir):
     run = get_most_recent_run(outdir, field["target_sas_id"], "VLBI_delay-calibration")
     solutions = list((run / "results_VLBI_delay-calibration").glob(
@@ -206,6 +220,7 @@ def run_linc_calibrator_toil(field, calibrator_field: int, db: FlocsDB):
 
 
 def run_linc_target_cwltool(field, db: FlocsDB):
+    check_target_subbands(field)
     print(
         f"Processing target observation {field['field_name']} {field['target_sas_id']} with calibrator {field['selected_calibrator_sas_id']}"
     )
@@ -282,6 +297,7 @@ def run_linc_target_cwltool(field, db: FlocsDB):
 
 
 def run_linc_target_toil(field, db: FlocsDB):
+    check_target_subbands(field)
     print(
         f"Processing target observation {field['field_name']} {field['target_sas_id']} with calibrator {field['selected_calibrator_sas_id']}"
     )

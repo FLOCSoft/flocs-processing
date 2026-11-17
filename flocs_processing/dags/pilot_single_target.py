@@ -1,6 +1,7 @@
 from enum import Enum
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
 from flocs_processing.pipeline_runners import (
+    check_target_subbands,
     get_most_recent_run,
     run_linc_calibrator_cwltool,
     run_linc_calibrator_toil,
@@ -230,6 +231,10 @@ def pilot_single_target():
         ACCEPTED_ONLINE_FRACTION = 0.95
         MAX_RESCHEDULES_CALIBRATOR = 3
         MAX_RESCHEDULES_TARGET = 3
+        minfreq = 120 if field["freq_min_mhz"] is None else field["freq_min_mhz"]
+        maxfreq = 168 if field["freq_max_mhz"] is None else field["freq_max_mhz"]
+        if minfreq >= maxfreq:
+            raise AirflowFailException("freq_min_mhz must be less than freq_max_mhz.")
         if CURRENT_DB.is_step_finished(field["field_name"], "download", field["target_sas_id"]):
             obsids = list(
                 (pathlib.Path(field["input_location"]) / "target").glob("L*")
@@ -247,6 +252,7 @@ def pilot_single_target():
                 # Slice to strip of the L prefix
                 CURRENT_DB.update_target_sas_id(field["target_sas_id"], actual_sasid)
             field["target_sas_id"] = actual_sasid
+            check_target_subbands(field)
             return field
         else:
             database_target_sasid = str(field["target_sas_id"])
@@ -372,8 +378,8 @@ def pilot_single_target():
                                     target_coordinates.dec.deg,
                                     TARGET_COORDINATE_MATCH_RADIUS_DEG,
                                     0,
-                                    120,
-                                    168,
+                                    minfreq,
+                                    maxfreq,
                                 )
                             except SystemExit:
                                 # The current stager exits on multiple positional
@@ -406,8 +412,8 @@ def pilot_single_target():
                             "ALL",
                             selected_sasid,
                             selected_sapid,
-                            120,
-                            168,
+                            minfreq,
+                            maxfreq,
                         )
                         if str(stager.obsid) != selected_sasid:
                             raise ValueError(
@@ -424,8 +430,8 @@ def pilot_single_target():
                             "ALL",
                             field["target_sas_id"],
                             None,
-                            120,
-                            168,
+                            minfreq,
+                            maxfreq,
                         )
                         if stager.sapid is None:
                             usable_saps = [
@@ -450,6 +456,11 @@ def pilot_single_target():
                         f"Could not select a target beam for "
                         f"{field['field_name']} ({field['target_sas_id']}): {err}"
                     ) from err
+                expected = field["number_subbands"]
+                if expected is not None and len(stager.target_uris) != expected:
+                    raise AirflowFailException(
+                        f"Expected {expected} target subbands, found {len(stager.target_uris)} in the selected frequency range."
+                    )
                 if stage_calibrators:
                     stager.find_nearest_calibrators(2, 120, 168)
                     CURRENT_DB.set_field_downloading(
@@ -463,6 +474,7 @@ def pilot_single_target():
                         )
                     stage_id_target = stager.stage_target()
             else:
+                check_target_subbands(field)
                 CURRENT_DB.set_field_downloaded(field["field_name"], field["target_sas_id"])
                 return field
 
@@ -554,6 +566,7 @@ def pilot_single_target():
                 if calibrator_downloaded and target_downloaded:
                     CURRENT_DB.update_target_sas_id(database_target_sasid, actual_sasid)
                     field["target_sas_id"] = actual_sasid
+                    check_target_subbands(field)
                     CURRENT_DB.set_field_downloaded(field["field_name"], actual_sasid)
                     break
                 time.sleep(60)

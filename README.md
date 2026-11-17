@@ -14,7 +14,7 @@ Flocs-processing requires three folders to be setup:
 The expected naming directory structure for input data is `<data folder>/<field name>/{calibrator,target}`. Inside the calibrator and target folders, the observations should follow the usual `LXXXXXX` naming scheme. These **must** match the SAS IDs in the database for flocs to be able to find them.
 
 ## Database setup
-A database for processing is created via `flocs-processing create-database`. This will create an empty database with the 33 processing columns; `--pipelines` selects `vlbi-widefield` (the default) or `vlbi-single-target`. Stage completion records are stored beside the SQLite file in `<dbname>.steps/`; keep this directory with the database when copying it. Datasets to process can be added via `flocs-processing add-field` or existing fields manipulated via `flocs-processing update-field-status` or `flocs-processing update-pipeline-status`.
+A database for processing is created via `flocs-processing create-database`. This will create an empty database with the 33 processing columns; `--pipelines` selects `vlbi-widefield` (the default) or `vlbi-single-target`. `freq_min_mhz` and `freq_max_mhz` set the target download range (120–168 MHz when unset); `number_subbands`, when set, checks the expected input count for one-MS-per-subband data. Stage completion records are stored beside the SQLite file in `<dbname>.steps/`; keep this directory with the database when copying it. Datasets to process can be added via `flocs-processing add-field` or existing fields manipulated via `flocs-processing update-field-status` or `flocs-processing update-pipeline-status`.
 
 ## Processing data
 ### Automatic setup via flocs
