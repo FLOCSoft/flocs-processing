@@ -621,12 +621,9 @@ def ilotss():
     @task
     def run_vlbi_ddcal(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_dd"] == PIPELINE_STATUS.processing.value:
-            raise AirflowFailException(
-                "DD calibration is marked as processing; check the existing workflow "
-                "and recover it before retrying."
-            )
-        if field["status_vlbi_dd"] == PIPELINE_STATUS.finished.value:
+        if (field["status_vlbi_dd"] == PIPELINE_STATUS.finished.value) or (
+            field["status_vlbi_dd"] == PIPELINE_STATUS.processing.value
+        ):
             return field
         else:
             if CWL_RUNNER_PILOT_DDCAL == "cwltool":
