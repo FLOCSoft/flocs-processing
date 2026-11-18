@@ -91,6 +91,9 @@ def get_delay_solution(field, db, outdir):
         source = next(iter(sources))
         if isinstance(source, bytes):
             source = source.decode()
+        identifier = re.search(r"ILTJ\d{6}\.\d{2}[+\-]\d{6}\.\d{1}", solutions[0].name)
+        if identifier:
+            source = identifier.group(0)
         db.set_delay_calibrator(field["field_name"], field["target_sas_id"], source)
     finally:
         h5.close()

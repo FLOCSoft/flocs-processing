@@ -82,6 +82,13 @@ class FlocsDB:
         except FileNotFoundError:
             return {}
 
+    def _progress_status(self, target):
+        statuses = {json.loads(path.read_text()).get("status")
+                    for path in self._receipt(target, "download").parent.glob("*.json")}
+        if PIPELINE_STATUS.await_approval.value in statuses and PIPELINE_STATUS.processing.value not in statuses:
+            return "awaiting_approval"
+        return "running"
+
     def _update(self, name, target, values, run_id=None):
         owner = run_id if run_id is not None else self._run_id()
         values = dict(values, last_updated_at=self._now())
@@ -141,10 +148,10 @@ class FlocsDB:
             if row["workflow_run_id"] == run_id:
                 if row["processing_status"] in {"failed", "finished"}:
                     db.execute(
-                        f"UPDATE {self._table} SET processing_status='running', "
+                        f"UPDATE {self._table} SET processing_status=?, "
                         "processing_end_time=NULL, last_error=NULL, last_updated_at=? "
                         "WHERE target_sas_id=? AND workflow_run_id=?",
-                        (self._now(), str(target), run_id),
+                        (self._progress_status(target), self._now(), str(target), run_id),
                     )
                     row = db.execute(
                         f"SELECT * FROM {self._table} WHERE target_sas_id=?", (str(target),)
@@ -152,7 +159,7 @@ class FlocsDB:
                 return dict(row)
             if row["processing_status"] not in {"queued", "failed"}:
                 return None
-            values = dict(workflow_run_id=run_id, processing_status="running",
+            values = dict(workflow_run_id=run_id, processing_status=self._progress_status(target),
                           processing_start_time=self._now(), processing_end_time=None,
                           processing_cluster=cluster, processing_user=user, processing_host=host,
                           last_updated_at=self._now(), last_error=None)
@@ -195,6 +202,8 @@ class FlocsDB:
             ).fetchone()
             if row is None or (owner is not None and row["workflow_run_id"] != owner):
                 raise LookupError(f"Field {name}, target {target} is missing or belongs to another workflow.")
+            retrying = (row["processing_status"] == "failed" and status == PIPELINE_STATUS.processing.value
+                        and self._read_receipt(target, identifier).get("status") == PIPELINE_STATUS.error.value)
             values = {"last_updated_at": self._now()}
             if status == PIPELINE_STATUS.nothing.value:
                 receipt_path.unlink(missing_ok=True)
@@ -211,17 +220,16 @@ class FlocsDB:
                 if str(identifier).startswith("vlbi_facet_imaging_"):
                     phase = "vlbi_facet_imaging"
                 values["processing_step"] = phase
-                if status == PIPELINE_STATUS.processing.value:
-                    if row["processing_status"] not in {"failed", "finished"}:
-                        values.update(processing_status="running", last_error=None)
-                elif status == PIPELINE_STATUS.await_approval.value:
-                    if row["processing_status"] not in {"failed", "finished"}:
-                        values["processing_status"] = "awaiting_approval"
-                elif status == PIPELINE_STATUS.finished.value:
-                    if row["processing_status"] == "awaiting_approval" and row["processing_step"] == phase:
-                        values["processing_status"] = "running"
-                elif status == PIPELINE_STATUS.error.value:
+                if status == PIPELINE_STATUS.error.value:
                     values["last_error"] = f"{identifier} failed."
+            starting = (status in {PIPELINE_STATUS.processing.value, PIPELINE_STATUS.await_approval.value}
+                        and row["processing_status"] not in {"failed", "finished"})
+            if row["processing_status"] in {"running", "awaiting_approval"} or starting or retrying:
+                values["processing_status"] = self._progress_status(target)
+            if status == PIPELINE_STATUS.processing.value and (starting or retrying):
+                values["last_error"] = None
+                if retrying:
+                    values["processing_end_time"] = None
             db.execute(
                 f"UPDATE {self._table} SET " + ", ".join(f"{key}=?" for key in values)
                 + " WHERE field_name=? AND target_sas_id=?",
