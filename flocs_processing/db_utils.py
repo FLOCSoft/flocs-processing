@@ -102,9 +102,7 @@ class FlocsDB:
                 raise LookupError(f"Field {name}, target {target} is missing or belongs to another workflow.")
 
     def get_db_columns(self, obsid: str = "", intent="%"):
-        modes = {"widefield": "vlbi-widefield", "single-target": "vlbi-single-target",
-                 "vlbi-widefield": "vlbi-widefield", "vlbi-single-target": "vlbi-single-target"}
-        if intent != "%" and intent not in modes:
+        if intent not in {"%", "vlbi-widefield", "vlbi-single-target"}:
             raise ValueError(f"Unknown processing mode: {intent}")
         where, parameters = [], []
         if obsid:
@@ -114,7 +112,7 @@ class FlocsDB:
             where.append("status='queued'")
         if intent != "%":
             where.append("pipelines=?")
-            parameters.append(modes[intent])
+            parameters.append(intent)
         with sqlite3.connect(self.DATABASE) as db:
             db.row_factory = sqlite3.Row
             return db.execute(
@@ -258,11 +256,8 @@ class FlocsDB:
     def set_status_finished(self, name, identifier, target):
         self._set_step(name, identifier, target, PIPELINE_STATUS.finished.value)
 
-    def set_status_downloaded(self, name, identifier, target=None):
-        if target is None:
-            self.set_field_downloaded(name, identifier)
-        else:
-            self._set_step(name, identifier, target, PIPELINE_STATUS.downloaded.value)
+    def set_status_downloaded(self, name, identifier, target):
+        self._set_step(name, identifier, target, PIPELINE_STATUS.downloaded.value)
 
     def set_field_downloaded(self, name, target):
         self._set_step(name, "download", target, PIPELINE_STATUS.finished.value)

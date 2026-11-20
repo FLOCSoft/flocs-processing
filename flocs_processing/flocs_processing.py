@@ -5,13 +5,10 @@ from cyclopts import Parameter
 from enum import Enum
 import cyclopts
 import functools
-import json
-from pathlib import Path
 import sqlite3
 import subprocess
 import structlog
 from typing import Annotated, Literal, Optional, get_args
-from urllib.parse import quote
 
 app = cyclopts.App()
 
@@ -77,52 +74,27 @@ class PIPELINE_STATUS(Enum):
         return self.value < other.value
 
 
-# These columns also form the additive migration for databases created by this branch.
-CALIBRATOR_COLUMNS = {
-    "delay_calibrator_phase_score": "REAL",
-    "delay_calibrator_amp_score": "REAL",
-    "n_dd_calibrators": "INTEGER",
-    **{f"dd_calibrator_{score}_score_{stat}": "REAL"
-       for score in ("phase", "amp") for stat in ("min", "max", "median")},
-}
-
-
-COLUMN_RENAMES = {
-    "field_name": "target_name",
-    "target_sas_id": "sas_id_target",
-    "calibrator1_sas_id": "sas_id_calibrator1",
-    "calibrator2_sas_id": "sas_id_calibrator2",
-    "selected_calibrator_sas_id": "sas_id_calibrator_final",
-    "processing_status": "status",
-}
-
-
-def _status_columns() -> dict[str, str]:
-    facets = ", ".join(STEP_COLUMNS[step] for step in FACET_STEPS)
-    # The summary can only become finished once all five imaging jobs are finished.
-    return {
-        **dict.fromkeys(STEP_COLUMNS.values(), "SMALLINT NOT NULL DEFAULT 0"),
-        "downloaded": "INTEGER GENERATED ALWAYS AS (status_download IN (2, 3)) VIRTUAL",
-        "status_vlbi_facet_imaging": f"""SMALLINT GENERATED ALWAYS AS (
-            CASE WHEN 99 IN ({facets}) THEN 99
-                 WHEN 98 IN ({facets}) THEN 98
-                 WHEN 3 IN ({facets}) THEN 3
-                 WHEN min({facets}) = max({facets}) THEN min({facets})
-                 ELSE 98 END) VIRTUAL""",
-    }
-
-
-def _quote_table(table_name: str) -> str:
-    return '"' + table_name.replace('"', '""') + '"'
-
-
-def _create_table(db: sqlite3.Connection, table: str, pipelines: str):
+@app.command()
+def create_database(
+    dbname: Annotated[
+        str, Parameter(help="Sqlite3 database from which processing will be done.")
+    ],
+    table_name: Annotated[
+        str, Parameter(help="Database table that will be processed.")
+    ] = "processing_flocs",
+    pipelines: Annotated[
+        Literal["vlbi-widefield", "vlbi-single-target"],
+        Parameter(help="Pipeline this database will process."),
+    ] = "vlbi-widefield",
+):
     if pipelines not in {"vlbi-widefield", "vlbi-single-target"}:
         raise ValueError(f"Unknown processing mode: {pipelines}")
-    extra_columns = ", ".join(
-        f"{name} {definition}" for name, definition in (CALIBRATOR_COLUMNS | _status_columns()).items()
+    table = '"' + table_name.replace('"', '""') + '"'
+    status_columns = ", ".join(
+        f"{column} SMALLINT NOT NULL DEFAULT 0" for column in STEP_COLUMNS.values()
     )
-    db.execute(f"""CREATE TABLE {table} (
+    facets = ", ".join(STEP_COLUMNS[step] for step in FACET_STEPS)
+    dbstr = f"""CREATE TABLE {table} (
         target_name TEXT NOT NULL,
         sas_id_target TEXT PRIMARY KEY NOT NULL,
         project_code TEXT,
@@ -156,146 +128,26 @@ def _create_table(db: sqlite3.Connection, table: str, pipelines: str):
         work_directory TEXT,
         output_location TEXT,
         last_error TEXT,
-        {extra_columns}
-    )""")
-
-
-@app.command()
-def create_database(
-    dbname: Annotated[
-        str, Parameter(help="Sqlite3 database from which processing will be done.")
-    ],
-    table_name: Annotated[
-        str, Parameter(help="Database table that will be processed.")
-    ] = "processing_flocs",
-    pipelines: Annotated[
-        Literal["vlbi-widefield", "vlbi-single-target"],
-        Parameter(help="Pipeline this database will process."),
-    ] = "vlbi-widefield",
-):
+        delay_calibrator_phase_score REAL,
+        delay_calibrator_amp_score REAL,
+        n_dd_calibrators INTEGER,
+        dd_calibrator_phase_score_min REAL,
+        dd_calibrator_phase_score_max REAL,
+        dd_calibrator_phase_score_median REAL,
+        dd_calibrator_amp_score_min REAL,
+        dd_calibrator_amp_score_max REAL,
+        dd_calibrator_amp_score_median REAL,
+        {status_columns},
+        downloaded INTEGER GENERATED ALWAYS AS (status_download IN (2, 3)) VIRTUAL,
+        status_vlbi_facet_imaging SMALLINT GENERATED ALWAYS AS (
+            CASE WHEN 99 IN ({facets}) THEN 99
+                 WHEN 98 IN ({facets}) THEN 98
+                 WHEN 3 IN ({facets}) THEN 3
+                 WHEN min({facets}) = max({facets}) THEN min({facets})
+                 ELSE 98 END) VIRTUAL
+    )"""
     with sqlite3.connect(dbname) as db:
-        _create_table(db, _quote_table(table_name), pipelines)
-
-
-def _import_step_files(db: sqlite3.Connection, table: str, dbname: str, new_statuses: set[str]):
-    if not new_statuses:
-        return
-    database = Path(dbname).expanduser().resolve()
-    steps = database.with_name(database.name + ".steps")
-    if steps.exists() and not steps.is_dir():
-        raise ValueError(f"Expected a directory at {steps}.")
-    valid_statuses = {state.value for state in PIPELINE_STATUS}
-    for row in db.execute(f"SELECT * FROM {table}").fetchall():
-        target = row["sas_id_target"]
-        component = quote(str(target), safe="").replace(".", "%2E") or "%EMPTY"
-        directory = steps / component
-        # The previous CLI could queue, start a download or manually finish a field
-        # before creating its first step file. Every other phase needed this directory.
-        if not directory.is_dir():
-            if directory.exists():
-                raise ValueError(f"Expected a directory at {directory}.")
-            phase = row["processing_step"]
-            if phase in {"pending", "download"} or (phase == "finished" and not row["workflow_run_id"]):
-                continue
-            raise ValueError(f"Cannot import previous step statuses: {directory} is missing.")
-        for path in directory.glob("*.json"):
-            column = STEP_COLUMNS.get(path.stem)
-            if column is None:
-                raise ValueError(f"Unknown pipeline step in {path}.")
-            status = json.loads(path.read_text())["status"]
-            if type(status) is not int or status not in valid_statuses:
-                raise ValueError(f"Invalid pipeline status in {path}: {status!r}.")
-            if column not in new_statuses and status != row[column]:
-                raise ValueError(f"Conflicting SQLite and file statuses for {path}.")
-            db.execute(f"UPDATE {table} SET {column}=? WHERE sas_id_target=?", (status, target))
-
-
-def _copy_legacy_fields(db: sqlite3.Connection, table: str, legacy_table: str, legacy_pipeline: Optional[str]):
-    routes = {
-        "vlbi-widefield": "vlbi-widefield", "vlbi-delay-widefield": "vlbi-widefield",
-        "vlbi-single-target": "vlbi-single-target", "vlbi-delay-single-target": "vlbi-single-target",
-    }
-    statuses = {
-        "not started": "queued", "downloaded": "queued", "downloading": "running",
-        "processing": "running", "failed": "failed", "finished": "finished",
-    }
-    for record in db.execute(f"SELECT * FROM {legacy_table}"):
-        old = dict(record)
-        target = old["sas_id_target"]
-        tokens = {token.strip().lower() for token in (old["pipelines"] or "").split(",")}
-        pipelines = {routes[token] for token in tokens if token in routes}
-        pipeline = pipelines.pop() if len(pipelines) == 1 else legacy_pipeline
-        if not pipeline:
-            raise ValueError(f"Target {target} has ambiguous pipelines {old['pipelines']!r}. Specify --legacy-pipeline.")
-        values = {
-            "target_name": old["target_name"],
-            "sas_id_target": target,
-            "sas_id_calibrator1": old.get("sas_id_calibrator1"),
-            "sas_id_calibrator2": old.get("sas_id_calibrator2"),
-            "sas_id_calibrator_final": old.get("sas_id_calibrator_final"),
-            "priority": old["priority"] or 0,
-            "pipelines": pipeline,
-            "status": statuses[old["status"]],
-        }
-        if old["downloaded"] or old["status"] == "downloaded":
-            values["status_download"] = PIPELINE_STATUS.finished.value
-        elif old["status"] == "downloading":
-            values["status_download"] = PIPELINE_STATUS.processing.value
-        for column in STEP_COLUMNS.values():
-            if column in old:
-                values[column] = old[column] or 0
-        if old["status"] == "finished":
-            values["processing_step"] = "finished"
-        elif old["status"] == "downloading":
-            values["processing_step"] = "download"
-        elif old["status"] in {"processing", "failed"}:
-            # Legacy rows contain no Airflow run ID and can have several active steps.
-            active = [step for step, column in STEP_COLUMNS.items() if values.get(column) in {3, 98, 99}]
-            values["processing_step"] = active[0] if len(active) == 1 else "unknown"
-            stage_statuses = {values.get(column) for column in STEP_COLUMNS.values()}
-            if old["status"] == "processing" and 3 in stage_statuses and 98 not in stage_statuses:
-                values["status"] = "awaiting_approval"
-        columns = ", ".join(values)
-        placeholders = ", ".join("?" for _ in values)
-        db.execute(f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", list(values.values()))
-
-
-@app.command()
-def migrate_database(
-    dbname: Annotated[str, Parameter(help="Existing processing database to migrate.")],
-    table_name: Annotated[str, Parameter(help="Processing table to migrate.")] = "processing_flocs",
-    legacy_pipeline: Annotated[
-        Optional[Literal["vlbi-widefield", "vlbi-single-target"]],
-        Parameter(help="Route for master-branch rows whose pipelines do not specify a unique route."),
-    ] = None,
-):
-    """Restore main-branch column names and import previous step statuses."""
-    table = _quote_table(table_name)
-    with sqlite3.connect(Path(dbname).resolve().as_uri() + "?mode=rw", uri=True) as db:
-        db.row_factory = sqlite3.Row
-        db.execute("BEGIN IMMEDIATE")
-        existing = {row["name"] for row in db.execute(f"PRAGMA table_xinfo({table})")}
-        if "processing_step" in existing and "workflow_run_id" in existing:
-            for old, new in COLUMN_RENAMES.items():
-                if old in existing:
-                    if new in existing:
-                        raise ValueError(f"Conflicting database columns {old} and {new}.")
-                    db.execute(f'ALTER TABLE {table} RENAME COLUMN "{old}" TO "{new}"')
-                    existing.remove(old)
-                    existing.add(new)
-            for name, definition in (CALIBRATOR_COLUMNS | _status_columns()).items():
-                if name not in existing:
-                    db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
-            _import_step_files(db, table, dbname, set(STEP_COLUMNS.values()) - existing)
-        elif "sas_id_target" in existing and "target_name" in existing:
-            # Keep the original table, including data the new schema cannot represent,
-            # such as a shared facet status with no per-resolution completion records.
-            legacy_table = _quote_table(table_name + "_legacy")
-            db.execute(f"ALTER TABLE {table} RENAME TO {legacy_table}")
-            _create_table(db, table, legacy_pipeline or "vlbi-widefield")
-            _copy_legacy_fields(db, table, legacy_table, legacy_pipeline)
-        else:
-            raise ValueError(f"Unrecognised processing schema for {table_name} in {dbname}.")
+        db.execute(dbstr)
 
 
 @app.command()

@@ -128,7 +128,6 @@ def get_delay_solution(field, db, outdir):
     solutions = list(results.glob("merged*selfcalcycle???_linearfulljones*.h5"))
     if not solutions:
         raise AirflowFailException(f"No final delay solution in {results}.")
-    # Keep the runner's first-solution convention for older multi-candidate runs.
     solution = solutions[0]
     source = get_solution_source(solution)
     directions = get_solution_directions(solution)

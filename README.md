@@ -14,24 +14,7 @@ Flocs-processing requires three folders to be setup:
 The expected naming directory structure for input data is `<data folder>/<field name>/{calibrator,target}`. Inside the calibrator and target folders, the observations should follow the usual `LXXXXXX` naming scheme. These **must** match the SAS IDs in the database for flocs to be able to find them.
 
 ## Database setup
-
-The observation columns retain the names used on main, including `target_name`, `sas_id_target`, `sas_id_calibrator1`, `sas_id_calibrator2`, `sas_id_calibrator_final` and `status`.
-
-Create a SQLite database with `flocs-processing create-database`. Use `--pipelines` to select `vlbi-widefield` (the default) or `vlbi-single-target`. Add observations with `flocs-processing add-field`. `freq_min_mhz` and `freq_max_mhz` set the target download range (120–168 MHz by default). For one-MS-per-subband inputs, `number_subbands` sets the expected input count.
-
-Each observation has a `status` and a `status_*` column for each stage. The stage values are 0 (not started), 1 (downloaded), 2 (finished), 3 (awaiting approval), 98 (processing) and 99 (failed). Use `update-field-status` for the observation and `update-pipeline-status` for a stage. For example, after reviewing a delay solution, use the following command to approve it.
-
-```sh
-flocs-processing update-pipeline-status --dbname ILoTSS --field-name Example --sas-id-target 12345 --pipeline vlbi_delay --set-status success
-```
-
-The five `status_vlbi_facet_imaging_*` columns track each imaging resolution. The shared `status_vlbi_facet_imaging` reads as finished when all five are finished.
-
-The selected delay calibrator has final `delay_calibrator_phase_score` and `delay_calibrator_amp_score` values. For DD calibration, `n_dd_calibrators` counts the directions in the final merged solution. The `dd_calibrator_phase_score_*` and `dd_calibrator_amp_score_*` columns give the minimum, maximum and median of the available final scores for those directions. Missing scores are NULL. The scores describe the last successfully read calibration products. Use the stage status to follow a retry.
-
-To upgrade an existing database, stop writers using the old code, then run `flocs-processing migrate-database --dbname ILoTSS`. For an earlier version of this branch, keep `ILoTSS.steps/` beside the database during migration. The command imports those records once. It also renames the columns from earlier versions of this branch while preserving the stored values. The updated DAG reads and writes stage status in SQLite. Historical scores start as NULL and are populated when the relevant products are processed.
-
-When migrating an upstream database, the command keeps the original table with a `_legacy` suffix. For observations without a unique pipeline route, specify `--legacy-pipeline vlbi-widefield` or `--legacy-pipeline vlbi-single-target`. Check any previously started facet imaging against its Airflow tasks or outputs before resuming those observations. The old shared flag does not identify which resolutions finished.
+A database for processing is created via `flocs-processing create-database`. This will create an empty database with the observation metadata, processing statuses and calibrator scores. The `--pipelines` option selects `vlbi-widefield` (the default) or `vlbi-single-target`. Datasets to process can be added via `flocs-processing add-field` or existing fields manipulated via `flocs-processing update-field-status` or `flocs-processing update-pipeline-status`.
 
 ## Processing data
 ### Automatic setup via flocs
