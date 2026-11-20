@@ -1,12 +1,7 @@
 from enum import Enum
 import functools
-import json
-import os
-from pathlib import Path
 import sqlite3
 from datetime import datetime, timezone
-from urllib.parse import quote
-from uuid import uuid4
 
 
 class FIELD_STATUS(Enum):
@@ -45,13 +40,24 @@ class PIPELINE_STATUS(Enum):
         return self.value < other.value
 
 
+FACET_STEPS = tuple(
+    f"vlbi_facet_imaging_{resolution}" for resolution in ("6.0", "3.0", "1.5", "0.6", "0.3")
+)
+STEP_COLUMNS = {
+    step: "status_" + step.replace(".", "p")
+    for step in (
+        "download", "calibrator1", "calibrator2", "target", "vlbi_delay", "prepare_ddf",
+        "ddf", "prepare_ddf_subtract", "vlbi_ddf_subtract", "vlbi_dd", "vlbi_intermediate_img",
+        "vlbi_facet_subtract", *FACET_STEPS,
+    )
+}
+
+
 class FlocsDB:
     def __init__(self, dbname: str, db_table: str):
         self.DATABASE = dbname
         self.TABLE_NAME = db_table
         self._table = '"' + db_table.replace('"', '""') + '"'
-        database_path = Path(str(dbname)).expanduser().resolve()
-        self._steps = database_path.with_name(database_path.name + ".steps")
 
     @staticmethod
     def _now():
@@ -72,19 +78,9 @@ class FlocsDB:
             return None
         return f"{run.dag_id}:{run.run_id}"
 
-    def _receipt(self, target, identifier):
-        component = quote(str(target), safe="").replace(".", "%2E") or "%EMPTY"
-        return self._steps / component / (quote(str(identifier), safe="") + ".json")
-
-    def _read_receipt(self, target, identifier):
-        try:
-            return json.loads(self._receipt(target, identifier).read_text())
-        except FileNotFoundError:
-            return {}
-
-    def _progress_status(self, target):
-        statuses = {json.loads(path.read_text()).get("status")
-                    for path in self._receipt(target, "download").parent.glob("*.json")}
+    @staticmethod
+    def _progress_status(row):
+        statuses = {row[column] for column in STEP_COLUMNS.values()}
         if PIPELINE_STATUS.await_approval.value in statuses and PIPELINE_STATUS.processing.value not in statuses:
             return "awaiting_approval"
         return "running"
@@ -151,7 +147,7 @@ class FlocsDB:
                         f"UPDATE {self._table} SET processing_status=?, "
                         "processing_end_time=NULL, last_error=NULL, last_updated_at=? "
                         "WHERE target_sas_id=? AND workflow_run_id=?",
-                        (self._progress_status(target), self._now(), str(target), run_id),
+                        (self._progress_status(row), self._now(), str(target), run_id),
                     )
                     row = db.execute(
                         f"SELECT * FROM {self._table} WHERE target_sas_id=?", (str(target),)
@@ -159,7 +155,7 @@ class FlocsDB:
                 return dict(row)
             if row["processing_status"] not in {"queued", "failed"}:
                 return None
-            values = dict(workflow_run_id=run_id, processing_status=self._progress_status(target),
+            values = dict(workflow_run_id=run_id, processing_status=self._progress_status(row),
                           processing_start_time=self._now(), processing_end_time=None,
                           processing_cluster=cluster, processing_user=user, processing_host=host,
                           last_updated_at=self._now(), last_error=None)
@@ -180,8 +176,9 @@ class FlocsDB:
         rows = self.get_db_columns(str(target))
         if not rows or rows[0]["field_name"] != name:
             raise LookupError(f"Field {name}, target {target} is not registered.")
-        receipt = self._read_receipt(target, identifier)
-        return receipt.get("status", PIPELINE_STATUS.nothing.value)
+        if identifier == "vlbi_facet_imaging":
+            return rows[0]["status_vlbi_facet_imaging"]
+        return rows[0][STEP_COLUMNS[identifier]]
 
     def is_step_finished(self, name, identifier, target):
         return self.get_step_status(name, identifier, target) in {
@@ -193,7 +190,8 @@ class FlocsDB:
 
     def _set_step(self, name, identifier, target, status):
         owner = self._run_id()
-        receipt_path = self._receipt(target, identifier)
+        steps = FACET_STEPS if identifier == "vlbi_facet_imaging" else (identifier,)
+        columns = [STEP_COLUMNS[step] for step in steps]
         with sqlite3.connect(self.DATABASE) as db:
             db.row_factory = sqlite3.Row
             db.execute("BEGIN IMMEDIATE")
@@ -203,21 +201,12 @@ class FlocsDB:
             if row is None or (owner is not None and row["workflow_run_id"] != owner):
                 raise LookupError(f"Field {name}, target {target} is missing or belongs to another workflow.")
             retrying = (row["processing_status"] == "failed" and status == PIPELINE_STATUS.processing.value
-                        and self._read_receipt(target, identifier).get("status") == PIPELINE_STATUS.error.value)
-            values = {"last_updated_at": self._now()}
-            if status == PIPELINE_STATUS.nothing.value:
-                receipt_path.unlink(missing_ok=True)
-            else:
-                receipt = {"status": status, "run_id": owner or row["workflow_run_id"]}
-                receipt_path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = receipt_path.with_name(receipt_path.name + "." + uuid4().hex + ".tmp")
-                try:
-                    temporary.write_text(json.dumps(receipt))
-                    os.replace(temporary, receipt_path)
-                finally:
-                    temporary.unlink(missing_ok=True)
+                        and any(row[column] == PIPELINE_STATUS.error.value for column in columns))
+            values = dict.fromkeys(columns, status)
+            values["last_updated_at"] = self._now()
+            if status != PIPELINE_STATUS.nothing.value:
                 phase = "calibrators" if identifier in {"calibrator1", "calibrator2"} else identifier
-                if str(identifier).startswith("vlbi_facet_imaging_"):
+                if identifier in FACET_STEPS:
                     phase = "vlbi_facet_imaging"
                 values["processing_step"] = phase
                 if status == PIPELINE_STATUS.error.value:
@@ -225,7 +214,7 @@ class FlocsDB:
             starting = (status in {PIPELINE_STATUS.processing.value, PIPELINE_STATUS.await_approval.value}
                         and row["processing_status"] not in {"failed", "finished"})
             if row["processing_status"] in {"running", "awaiting_approval"} or starting or retrying:
-                values["processing_status"] = self._progress_status(target)
+                values["processing_status"] = self._progress_status(dict(row) | values)
             if status == PIPELINE_STATUS.processing.value and (starting or retrying):
                 values["last_error"] = None
                 if retrying:
@@ -241,7 +230,7 @@ class FlocsDB:
                                    "workflow_run_id": None, "processing_end_time": None, "last_error": None})
 
     def set_field_downloading(self, name, target):
-        self._update(name, target, {"processing_step": "download", "processing_status": "running"})
+        self.set_status_processing(name, "download", target)
 
     def set_field_processing(self, name, target):
         self._update(name, target, {"processing_status": "running"})
@@ -283,35 +272,35 @@ class FlocsDB:
             raise ValueError("Both old and new target SAS IDs must be provided.")
         if str(old_sas_id) == str(new_sas_id):
             return
-        old_path = self._receipt(old_sas_id, "download").parent
-        new_path = self._receipt(new_sas_id, "download").parent
         owner = self._run_id()
-        moved = False
-        try:
-            with sqlite3.connect(self.DATABASE) as db:
-                db.execute("BEGIN IMMEDIATE")
-                if old_path.exists() and new_path.exists():
-                    raise FileExistsError(f"Step receipts already exist for target {new_sas_id}.")
-                where = "target_sas_id=?"
-                parameters = [str(new_sas_id), str(old_sas_id)]
-                if owner is not None:
-                    where += " AND workflow_run_id=?"
-                    parameters.append(owner)
-                cursor = db.execute(
-                    f"UPDATE {self._table} SET target_sas_id=? WHERE {where}", parameters
-                )
-                if cursor.rowcount != 1:
-                    raise LookupError(f"Target {old_sas_id} is missing or belongs to another workflow.")
-                if old_path.exists():
-                    old_path.rename(new_path)
-                    moved = True
-        except Exception:
-            if moved:
-                new_path.rename(old_path)
-            raise
+        where = "target_sas_id=?"
+        parameters = [str(new_sas_id), str(old_sas_id)]
+        if owner is not None:
+            where += " AND workflow_run_id=?"
+            parameters.append(owner)
+        with sqlite3.connect(self.DATABASE) as db:
+            cursor = db.execute(f"UPDATE {self._table} SET target_sas_id=? WHERE {where}", parameters)
+            if cursor.rowcount != 1:
+                raise LookupError(f"Target {old_sas_id} is missing or belongs to another workflow.")
 
     def set_final_calibrator(self, name, target, final_cal):
         self._update(name, target, {"selected_calibrator_sas_id": str(final_cal), "last_error": None})
 
-    def set_delay_calibrator(self, name, target, source):
-        self._update(name, target, {"selected_delay_calibrator": str(source)})
+    def set_delay_calibrator(self, name, target, source, phase_score=None, amp_score=None):
+        self._update(name, target, {
+            "selected_delay_calibrator": str(source),
+            "delay_calibrator_phase_score": phase_score,
+            "delay_calibrator_amp_score": amp_score,
+        })
+
+    def set_dd_calibrator_scores(self, name, target, n_dd_calibrators, phase_min, phase_max,
+                                 phase_median, amp_min, amp_max, amp_median):
+        self._update(name, target, {
+            "n_dd_calibrators": n_dd_calibrators,
+            "dd_calibrator_phase_score_min": phase_min,
+            "dd_calibrator_phase_score_max": phase_max,
+            "dd_calibrator_phase_score_median": phase_median,
+            "dd_calibrator_amp_score_min": amp_min,
+            "dd_calibrator_amp_score_max": amp_max,
+            "dd_calibrator_amp_score_median": amp_median,
+        })

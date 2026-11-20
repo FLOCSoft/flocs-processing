@@ -124,10 +124,9 @@ class STAGING_STATUS(Enum):
 
 
 def get_approval(field, identifier, needs_approval):
-    if not needs_approval or CURRENT_DB.get_step_status(
-        field["field_name"], identifier, field["target_sas_id"]
-    ) == PIPELINE_STATUS.finished.value:
-        return dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+    field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+    if not needs_approval or field[f"status_{identifier}"] == PIPELINE_STATUS.finished.value:
+        return field
 
 
 def field_failed(context):
@@ -141,9 +140,10 @@ def field_failed(context):
 
 
 def step_finished(field, identifier):
-    if CURRENT_DB.is_step_finished(field["field_name"], identifier, field["target_sas_id"]):
+    status = field[f"status_{identifier}"]
+    if status in (PIPELINE_STATUS.finished.value, PIPELINE_STATUS.await_approval.value):
         return True
-    if CURRENT_DB.is_step_processing(field["field_name"], identifier, field["target_sas_id"]):
+    if status == PIPELINE_STATUS.processing.value:
         raise AirflowFailException(
             f"{identifier} may still be running; check the existing job before retrying."
         )
@@ -459,11 +459,11 @@ def ilotss():
     @task(trigger_rule=TriggerRule.ALL_DONE)
     def select_best_calibrator(field, result1, result2):
         field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
-        result1 = field if field["calibrator1_sas_id"] and CURRENT_DB.is_step_finished(
-            field["field_name"], "calibrator1", field["target_sas_id"]
+        result1 = field if (
+            field["calibrator1_sas_id"] and field["status_calibrator1"] == PIPELINE_STATUS.finished.value
         ) else None
-        result2 = field if field["calibrator2_sas_id"] and CURRENT_DB.is_step_finished(
-            field["field_name"], "calibrator2", field["target_sas_id"]
+        result2 = field if (
+            field["calibrator2_sas_id"] and field["status_calibrator2"] == PIPELINE_STATUS.finished.value
         ) else None
         selected = field["selected_calibrator_sas_id"]
         if (result1 and selected == field["calibrator1_sas_id"]) or (
@@ -590,7 +590,7 @@ def ilotss():
     def run_ddf_pipeline(field):
         field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
         logsdir = os.path.join(field["output_location"], "logs")
-        if CURRENT_DB.is_step_processing(field["field_name"], "ddf", field["target_sas_id"]):
+        if field["status_ddf"] == PIPELINE_STATUS.processing.value:
             print(
                 f"ddf-pipeline for {field['field_name']} {field['target_sas_id']} should be running, attempting to resume polling..."
             )
@@ -704,7 +704,7 @@ def ilotss():
     @task
     def run_vlbi_facet_imaging_6p0(field):
         field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
-        if step_finished(field, "vlbi_facet_imaging_6.0"):
+        if step_finished(field, "vlbi_facet_imaging_6p0"):
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=6.0)
@@ -713,7 +713,7 @@ def ilotss():
     @task
     def run_vlbi_facet_imaging_3p0(field):
         field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
-        if step_finished(field, "vlbi_facet_imaging_3.0"):
+        if step_finished(field, "vlbi_facet_imaging_3p0"):
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=3.0)
@@ -722,7 +722,7 @@ def ilotss():
     @task
     def run_vlbi_facet_imaging_1p5(field):
         field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
-        if step_finished(field, "vlbi_facet_imaging_1.5"):
+        if step_finished(field, "vlbi_facet_imaging_1p5"):
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=1.5)
@@ -731,7 +731,7 @@ def ilotss():
     @task
     def run_vlbi_facet_imaging_0p6(field):
         field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
-        if step_finished(field, "vlbi_facet_imaging_0.6"):
+        if step_finished(field, "vlbi_facet_imaging_0p6"):
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=0.6)
@@ -740,7 +740,7 @@ def ilotss():
     @task
     def run_vlbi_facet_imaging_0p3(field):
         field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
-        if step_finished(field, "vlbi_facet_imaging_0.3"):
+        if step_finished(field, "vlbi_facet_imaging_0p3"):
             return field
         else:
             run_pilot_facet_imaging_toil(field, CURRENT_DB, resolution=0.3)
@@ -748,10 +748,10 @@ def ilotss():
 
     @task
     def finish_field(field):
+        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
         for resolution in (6.0, 3.0, 1.5, 0.6, 0.3):
-            if not CURRENT_DB.is_step_finished(
-                field["field_name"], f"vlbi_facet_imaging_{resolution}", field["target_sas_id"]
-            ):
+            suffix = str(resolution).replace(".", "p")
+            if field[f"status_vlbi_facet_imaging_{suffix}"] != PIPELINE_STATUS.finished.value:
                 raise AirflowFailException(f"Imaging at {resolution} arcsec has not finished.")
         context = get_current_context()
         CURRENT_DB.set_field_finished(

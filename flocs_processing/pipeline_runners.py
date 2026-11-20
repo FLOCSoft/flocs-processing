@@ -1,8 +1,11 @@
 import configparser
+import csv
+import math
 import os
 import pathlib
 import re
 import shlex
+import statistics
 import subprocess
 import time
 
@@ -48,14 +51,15 @@ NEEDS_MANUAL_APPROVAL_DELAY = parser.getboolean(
 def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.Path:
     rundirs = pathlib.Path(searchpath)
     rundirs_sorted = sorted(rundirs.iterdir())
+    observation = re.compile(rf"(?<!\d){re.escape(str(sas_id))}(?!\d)")
     if pipeline:
         rundirs_sorted_filtered = [
             d
             for d in rundirs_sorted
-            if ((sas_id in d.parts[-1]) and (pipeline in d.parts[-1])) and d.is_dir()
+            if observation.search(d.name) and pipeline in d.name and d.is_dir()
         ]
     else:
-        rundirs_sorted_filtered = [d for d in rundirs_sorted if sas_id in d.parts[-1]]
+        rundirs_sorted_filtered = [d for d in rundirs_sorted if observation.search(d.name)]
     try:
         rundir_final = rundirs_sorted_filtered[-1].absolute()
         return rundir_final
@@ -78,26 +82,148 @@ def check_target_subbands(field):
         )
 
 
-def get_delay_solution(field, db, outdir):
-    run = get_most_recent_run(outdir, field["target_sas_id"], "VLBI_delay-calibration")
-    solutions = list((run / "results_VLBI_delay-calibration").glob(
-        "merged*selfcalcycle???_linearfulljones*.h5"
-    ))
-    if not solutions:
-        raise AirflowFailException("Completed delay calibration has no merged solutions.")
-    h5 = h5parm(str(solutions[0]), readonly=True)
+def get_solution_directions(solution: pathlib.Path) -> dict:
+    """Read only the source names and coordinates from a PILOT solution."""
+    h5 = h5parm(str(solution), readonly=True)
     try:
-        sources = h5.getSolset("sol000").getSou()
-        source = next(iter(sources))
-        if isinstance(source, bytes):
-            source = source.decode()
-        identifier = re.search(r"ILTJ\d{6}\.\d{2}[+\-]\d{6}\.\d{1}", solutions[0].name)
-        if identifier:
-            source = identifier.group(0)
-        db.set_delay_calibrator(field["field_name"], field["target_sas_id"], source)
+        return {
+            name.decode() if isinstance(name, bytes) else name: tuple(position)
+            for name, position in h5.getSolset("sol000").getSou().items()
+        }
     finally:
         h5.close()
-    return solutions[0]
+
+
+def get_solution_source(solution: pathlib.Path) -> str:
+    # PILOT's parse_source_id uses the H5 basename for non-ILTJ targets.
+    identifier = re.search(r"ILTJ\d{6}\.\d{2}[+\-]\d{6}\.\d{1}", solution.name)
+    return identifier.group(0) if identifier else solution.name.removeprefix("select_")
+
+
+def read_validation_scores(path: pathlib.Path, dd: bool = False) -> dict:
+    """Read the final solution scores. Weak retries follow strong attempts in the CSV."""
+    scores = {}
+    with path.open(newline="") as stream:
+        reader = csv.DictReader(stream)
+        reader.fieldnames = [name.lower() for name in reader.fieldnames or []]
+        for row in reader:
+            if dd and (
+                row["accept_image"].lower() != "true"
+                or row["accept_solutions"].lower() != "true"
+            ):
+                continue
+            values = []
+            for raw_value in (row["phase_score"], row.get("amp_score")):
+                value = float(raw_value) if raw_value else None
+                if value is not None and not math.isfinite(value):
+                    value = None
+                values.append(value)
+            scores[row["source_id"]] = values
+    return scores
+
+
+def get_delay_solution(field, db, outdir):
+    run = get_most_recent_run(outdir, field["target_sas_id"], "VLBI_delay-calibration")
+    results = run / "results_VLBI_delay-calibration"
+    solutions = list(results.glob("merged*selfcalcycle???_linearfulljones*.h5"))
+    if not solutions:
+        raise AirflowFailException(f"No final delay solution in {results}.")
+    # Keep the runner's first-solution convention for older multi-candidate runs.
+    solution = solutions[0]
+    source = get_solution_source(solution)
+    directions = get_solution_directions(solution)
+    if not directions:
+        raise AirflowFailException(f"No delay calibrator direction in {solution}.")
+    direction = next(iter(directions))
+    validation = results / "validation_solutions.csv"
+    phase_score, amp_score = None, None
+    if validation.is_file():
+        scores = read_validation_scores(validation)
+        score_id = direction if source == solution.name and source not in scores else source
+        if score_id not in scores:
+            raise ValueError(f"No validation scores for {source} in {validation}.")
+        phase_score, amp_score = scores[score_id]
+    if source == solution.name:
+        source = direction
+    db.set_delay_calibrator(
+        field["field_name"], field["target_sas_id"], source, phase_score, amp_score
+    )
+    return solution
+
+
+def finish_delay_calibration(field, db, outdir):
+    try:
+        get_delay_solution(field, db, outdir)
+    except Exception:
+        db.set_status_failed(field["field_name"], "vlbi_delay", field["target_sas_id"])
+        raise
+    if NEEDS_MANUAL_APPROVAL_DELAY:
+        db.set_status_await_approval(field["field_name"], "vlbi_delay", field["target_sas_id"])
+    else:
+        db.set_status_finished(field["field_name"], "vlbi_delay", field["target_sas_id"])
+
+
+def get_dd_calibrator_scores(results: pathlib.Path) -> tuple:
+    """Summarise the accepted validation rows represented in the final merged H5."""
+    merged = results / "merged.h5"
+    directions = get_solution_directions(merged) if merged.is_file() else {}
+    validation = results / "validation.csv"
+    if not validation.is_file():
+        # Validation is optional in PILOT. The directions still count.
+        return len(directions), None, None, None, None, None, None
+    scores = read_validation_scores(validation, dd=True)
+    if not merged.is_file() and scores:
+        raise ValueError(f"Missing {merged} for accepted DD calibrators.")
+
+    sources = set(directions)
+    if not sources.issubset(scores):
+        # h5_merger renames sources Dir00, Dir01, ... . The exported single-source
+        # H5s retain the same coordinates and the catalogue ID in the filename.
+        by_direction = {
+            position: name for name, position in directions.items() if name in scores
+        }
+        for solution in results.glob("select_*.h5"):
+            source = get_solution_source(solution)
+            if source in scores:
+                positions = get_solution_directions(solution)
+                (position,) = positions.values()
+                if position in by_direction and by_direction[position] != source:
+                    raise ValueError(f"Two DD calibrators have the same coordinates in {results}.")
+                by_direction[position] = source
+        sources = {
+            by_direction[position]
+            for position in directions.values()
+            if position in by_direction
+        }
+    if len(sources) != len(directions):
+        raise ValueError(f"Cannot match all final DD directions to accepted scores in {validation}.")
+
+    summary = []
+    for index in (0, 1):  # phase, then amplitude
+        values = [scores[source][index] for source in sources]
+        measured = [value for value in values if value is not None]
+        if measured:
+            summary.extend((min(measured), max(measured), statistics.median(measured)))
+        else:
+            summary.extend((None, None, None))
+    return (len(sources), *summary)
+
+
+def finish_dd_calibration(field, db, outdir):
+    try:
+        run = get_most_recent_run(outdir, field["target_sas_id"], "VLBI_dd-calibration")
+        results = run / "results_VLBI_dd-calibration"
+        if not results.is_dir() or (
+            field["pipelines"] == "vlbi-widefield" and not (results / "merged.h5").is_file()
+        ):
+            raise AirflowFailException(f"Missing final DD calibration output in {results}.")
+        db.set_dd_calibrator_scores(
+            field["field_name"], field["target_sas_id"], *get_dd_calibrator_scores(results)
+        )
+    except Exception:
+        db.set_status_failed(field["field_name"], "vlbi_dd", field["target_sas_id"])
+        raise
+    db.set_status_finished(field["field_name"], "vlbi_dd", field["target_sas_id"])
 
 
 def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
@@ -476,15 +602,7 @@ def run_pilot_delay_cwltool(field, db: FlocsDB, mode="widefield"):
                 if (status == "RUNNING") or (status == "PENDING"):
                     time.sleep(60)
                 elif status == "COMPLETED":
-                    get_delay_solution(field, db, outdir)
-                    if NEEDS_MANUAL_APPROVAL_DELAY:
-                        db.set_status_await_approval(
-                            field["field_name"], "vlbi_delay", field["target_sas_id"],
-                        )
-                    else:
-                        db.set_status_finished(
-                            field["field_name"], "vlbi_delay", field["target_sas_id"],
-                        )
+                    finish_delay_calibration(field, db, outdir)
                     break
                 elif (
                     (status == "FAILED")
@@ -619,15 +737,7 @@ def run_pilot_delay_toil(field, db: FlocsDB, mode="widefield"):
                 success = True
 
         if success:
-            get_delay_solution(field, db, outdir)
-            if NEEDS_MANUAL_APPROVAL_DELAY:
-                db.set_status_await_approval(
-                    field["field_name"], "vlbi_delay", field["target_sas_id"],
-                )
-            else:
-                db.set_status_finished(
-                    field["field_name"], "vlbi_delay", field["target_sas_id"],
-                )
+            finish_delay_calibration(field, db, outdir)
         else:
             db.set_status_failed(field["field_name"], "vlbi_delay", field["target_sas_id"])
             raise RuntimeError
@@ -649,9 +759,7 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
         target_ms_path = target_path / "results_LINC_target" / "results"
         print(f"Using LINC target run: {target_path}")
 
-        sols_path = get_most_recent_run(outdir, field["target_sas_id"], "VLBI_delay")
-        sols_path = sols_path / "results_VLBI_delay-calibration"
-        sols = list(sols_path.glob("merged*selfcalcycle???_linearfulljones*.h5"))[0]
+        sols = get_delay_solution(field, db, outdir)
         print(f"Using PILOT delay calibration solutions: {sols}")
 
         source_cat = os.path.join(field.get("input_location") or os.path.join(DATA_DIR, field["field_name"]), "vlbi_target.csv")
@@ -726,9 +834,7 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
                 if (status == "RUNNING") or (status == "PENDING"):
                     time.sleep(60)
                 elif status == "COMPLETED":
-                    db.set_status_finished(
-                        field["field_name"], "vlbi_dd", field["target_sas_id"],
-                    )
+                    finish_dd_calibration(field, db, outdir)
                     break
                 elif (
                     (status == "FAILED")
@@ -758,9 +864,7 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
         target_ms_path = target_path / "results_LINC_target" / "results"
         print(f"Using LINC target run: {target_path}")
 
-        sols_path = get_most_recent_run(outdir, field["target_sas_id"], "VLBI_delay")
-        sols_path = sols_path / "results_VLBI_delay-calibration"
-        sols = list(sols_path.glob("merged*selfcalcycle???_linearfulljones*.h5"))[0]
+        sols = get_delay_solution(field, db, outdir)
         print(f"Using PILOT delay calibration solutions: {sols}")
 
         source_cat = os.path.join(field.get("input_location") or os.path.join(DATA_DIR, field["field_name"]), "vlbi_target.csv")
@@ -856,9 +960,7 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
             if pattern.search(f_err.read()):
                 success = True
         if success:
-            db.set_status_finished(
-                field["field_name"], "vlbi_dd", field["target_sas_id"],
-            )
+            finish_dd_calibration(field, db, outdir)
         else:
             db.set_status_failed(
                 field["field_name"], "vlbi_dd", field["target_sas_id"]
@@ -1228,11 +1330,9 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
         print(
             "No MSes found in delay-calibration output, will apply delay solutions to LINC."
         )
-        sols_path = get_most_recent_run(outdir, field["target_sas_id"], "VLBI_delay")
-        sols_path = sols_path / "results_VLBI_delay-calibration"
-        delay_sols = list(sols_path.glob("merged*selfcalcycle???_linearfulljones*.h5"))[
-            0
-        ]
+        delay_sols = get_delay_solution(field, db, outdir)
+        sourcedir = next(iter(get_solution_directions(delay_sols).values()))
+        delaydir = f"[{sourcedir[0]},{sourcedir[1]}]"
         print(f"Using PILOT delay calibration solutions: {delay_sols}")
 
         linc_path = get_most_recent_run(outdir, field["target_sas_id"], "LINC_target")
@@ -1265,13 +1365,6 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
             delay_corrected_mses.append(str(out_ms))
             continue
         if delay_sols:
-            h5 = h5parm(str(delay_sols))
-            ss = h5.getSolset("sol000")
-            # We only expect there to be one direction: the delay calibrator.
-            dirname = list(ss.getSou())[0]
-            db.set_delay_calibrator(field["field_name"], field["target_sas_id"], dirname)
-            sourcedir = ss.getSou()[dirname]
-            delaydir = f"[{sourcedir[0]},{sourcedir[1]}]"
             dp3_cmd = f"apptainer exec $CWL_SINGULARITY_CACHE/astronrd_linc_latest.sif DP3 numthreads=2 msin={ms} msout={out_ms} msout.uvwcompression=False  msout.antennacompression=False msout.scalarflags=False msout.storagemanager=Dysco steps=[applybeamdelay,applycal,applybeamtarget] applybeamdelay.type=applybeam applybeamdelay.beammode=full applybeamdelay.updateweights=True applybeamdelay.direction={delaydir} applycal.parmdb={delay_sols} applycal.correction=fulljones applycal.soltab=[amplitude000,phase000] applybeamtarget.type=applybeam applybeamtarget.beammode=full applybeamtarget.updateweights=True"
             print(dp3_cmd)
         else:
@@ -1335,11 +1428,9 @@ def run_prepare_ddf(field, db: FlocsDB):
         print(
             "No MSes found in delay-calibration output, will apply delay solutions to LINC."
         )
-        sols_path = get_most_recent_run(outdir, field["target_sas_id"], "VLBI_delay")
-        sols_path = sols_path / "results_VLBI_delay-calibration"
-        delay_sols = list(sols_path.glob("merged*selfcalcycle???_linearfulljones*.h5"))[
-            0
-        ]
+        delay_sols = get_delay_solution(field, db, outdir)
+        sourcedir = next(iter(get_solution_directions(delay_sols).values()))
+        delaydir = f"[{sourcedir[0]},{sourcedir[1]}]"
         print(f"Using PILOT delay calibration solutions: {delay_sols}")
 
         linc_path = get_most_recent_run(outdir, field["target_sas_id"], "LINC_target")
@@ -1374,13 +1465,6 @@ def run_prepare_ddf(field, db: FlocsDB):
             averaged_mses.append(str(out_ms))
             continue
         if delay_sols:
-            h5 = h5parm(str(delay_sols))
-            ss = h5.getSolset("sol000")
-            # We only expect there to be one direction: the delay calibrator.
-            dirname = list(ss.getSou())[0]
-            db.set_delay_calibrator(field["field_name"], field["target_sas_id"], dirname)
-            sourcedir = ss.getSou()[dirname]
-            delaydir = f"[{sourcedir[0]},{sourcedir[1]}]"
             dp3_cmd = f"apptainer exec $CWL_SINGULARITY_CACHE/astronrd_linc_latest.sif DP3 numthreads=2 msin={ms} msout={out_ms} msout.uvwcompression=False  msout.antennacompression=False msout.scalarflags=False msout.storagemanager=Dysco steps=[average,applybeamdelay,applycal,applybeamtarget,filter] average.timeresolution=8 average.freqresolution=97.64kHz applybeamdelay.type=applybeam applybeamdelay.beammode=full applybeamdelay.updateweights=True applybeamdelay.direction={delaydir} applycal.parmdb={delay_sols} applycal.correction=fulljones applycal.soltab=[amplitude000,phase000] applybeamtarget.type=applybeam applybeamtarget.beammode=full applybeamtarget.updateweights=True filter.remove=True filter.baseline='[CR]S*&&'"
             print(dp3_cmd)
         else:
