@@ -161,7 +161,7 @@ class STAGING_STATUS(Enum):
 
 
 def get_approval(field, identifier, needs_approval):
-    field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+    field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
     if not needs_approval or field[f"status_{identifier}"] == PIPELINE_STATUS.finished.value:
         return field
 
@@ -171,7 +171,7 @@ def field_failed(context):
     field = CURRENT_DB.get_run_field(run_id)
     if field:
         CURRENT_DB.set_field_failed(
-            field["field_name"], field["target_sas_id"],
+            field["target_name"], field["sas_id_target"],
             str(context.get("exception") or "DAG run failed."), run_id=run_id,
         )
 
@@ -193,21 +193,21 @@ def pilot_single_target():
     def get_unprocessed_target():
         context = get_current_context()
         conf = context["dag_run"].conf or {}
-        obsid = str(conf.get("target_sas_id") or "")
+        obsid = str(conf.get("sas_id_target") or "")
         run_id = f"{context['dag'].dag_id}:{context['dag_run'].run_id}"
         owned = CURRENT_DB.get_run_field(run_id)
         rows = [owned] if owned else CURRENT_DB.get_db_columns(obsid, intent="vlbi-single-target")
         for dbrow in rows:
             row = dict(dbrow)
-            if conf.get("field_name") and row["field_name"] != conf["field_name"]:
+            if conf.get("target_name") and row["target_name"] != conf["target_name"]:
                 raise AirflowFailException("Requested field name and SAS ID do not match.")
             field = CURRENT_DB.claim_field(
-                row["field_name"], row["target_sas_id"], run_id,
+                row["target_name"], row["sas_id_target"], run_id,
                 pipeline="vlbi-single-target", cluster=parser["DEFAULT"].get("PROCESSING_CLUSTER"),
                 user=getpass.getuser(), host=socket.gethostname(),
-                input_location=row["input_location"] or os.path.join(DATA_DIR, row["field_name"]),
+                input_location=row["input_location"] or os.path.join(DATA_DIR, row["target_name"]),
                 work_directory=row["work_directory"] or PROCESSING_DIR,
-                output_location=row["output_location"] or os.path.join(OUTPUT_DIR, row["field_name"]),
+                output_location=row["output_location"] or os.path.join(OUTPUT_DIR, row["target_name"]),
             )
             if field:
                 return field
@@ -219,7 +219,7 @@ def pilot_single_target():
     def check_fields():
         context = get_current_context()
         conf = context["dag_run"].conf or {}
-        obsid = str(conf.get("target_sas_id") or "")
+        obsid = str(conf.get("sas_id_target") or "")
         run_id = f"{context['dag'].dag_id}:{context['dag_run'].run_id}"
         fields = CURRENT_DB.get_run_field(run_id) or CURRENT_DB.get_db_columns(obsid, intent="vlbi-single-target")
         if obsid and not fields:
@@ -235,7 +235,7 @@ def pilot_single_target():
         maxfreq = 168 if field["freq_max_mhz"] is None else field["freq_max_mhz"]
         if minfreq >= maxfreq:
             raise AirflowFailException("freq_min_mhz must be less than freq_max_mhz.")
-        if CURRENT_DB.is_step_finished(field["field_name"], "download", field["target_sas_id"]):
+        if CURRENT_DB.is_step_finished(field["target_name"], "download", field["sas_id_target"]):
             obsids = list(
                 (pathlib.Path(field["input_location"]) / "target").glob("L*")
             )
@@ -245,53 +245,53 @@ def pilot_single_target():
                 )
             else:
                 actual_sasid = obsids[0].name[1:]
-                if field["target_sas_id"] != actual_sasid:
+                if field["sas_id_target"] != actual_sasid:
                     print(
-                        f"Updating target SAS id in database {field['target_sas_id']:s} -> {actual_sasid:s}"
+                        f"Updating target SAS id in database {field['sas_id_target']:s} -> {actual_sasid:s}"
                     )
                 # Slice to strip of the L prefix
-                CURRENT_DB.update_target_sas_id(field["target_sas_id"], actual_sasid)
-            field["target_sas_id"] = actual_sasid
+                CURRENT_DB.update_target_sas_id(field["sas_id_target"], actual_sasid)
+            field["sas_id_target"] = actual_sasid
             check_target_subbands(field)
             return field
         else:
-            database_target_sasid = str(field["target_sas_id"])
+            database_target_sasid = str(field["sas_id_target"])
             actual_sasid = database_target_sasid
             stage_calibrators = False
             num_downloaded_calib1 = 0
             num_downloaded_calib2 = 0
             num_staged_calib = 0
             num_staged_targ = 0
-            if os.path.exists(f"srms_{field['target_sas_id']}_calibrators.txt"):
+            if os.path.exists(f"srms_{field['sas_id_target']}_calibrators.txt"):
                 print("Found srm file; counting calibrator SRMs.")
                 out = subprocess.check_output(
-                    f"wc -l srms_{field['target_sas_id']}_calibrators.txt | cut -f 1 -d ' '",
+                    f"wc -l srms_{field['sas_id_target']}_calibrators.txt | cut -f 1 -d ' '",
                     text=True,
                     shell=True,
                 )
                 num_staged_calib = int(out.strip())
 
-            if os.path.exists(f"srms_{field['target_sas_id']}.txt"):
+            if os.path.exists(f"srms_{field['sas_id_target']}.txt"):
                 print("Found srm file; counting target SRMs.")
                 out = subprocess.check_output(
-                    f"wc -l srms_{field['target_sas_id']}.txt | cut -f 1 -d ' '",
+                    f"wc -l srms_{field['sas_id_target']}.txt | cut -f 1 -d ' '",
                     text=True,
                     shell=True,
                 )
                 num_staged_targ = int(out.strip())
 
-            if ("target_sas_id" not in field) or (not field["target_sas_id"]):
+            if ("sas_id_target" not in field) or (not field["sas_id_target"]):
                 raise AirflowFailException(
-                    f"No target SAS ID in database for field {field['field_name']}"
+                    f"No target SAS ID in database for field {field['target_name']}"
                 )
 
-            ms_folder = f"L{field['target_sas_id']}"
+            ms_folder = f"L{field['sas_id_target']}"
             calibrator_full_path = os.path.join(
                 field["input_location"], "target", ms_folder
             )
             if os.path.exists(calibrator_full_path):
-                if field["calibrator1_sas_id"]:
-                    ms_folder = f"L{field['calibrator1_sas_id']}"
+                if field["sas_id_calibrator1"]:
+                    ms_folder = f"L{field['sas_id_calibrator1']}"
                     cal1_full_path = os.path.join(
                         field["input_location"], "calibrator", ms_folder
                     )
@@ -302,8 +302,8 @@ def pilot_single_target():
                     else:
                         stage_calibrators = True
 
-                if field["calibrator2_sas_id"]:
-                    ms_folder = f"L{field['calibrator2_sas_id']}"
+                if field["sas_id_calibrator2"]:
+                    ms_folder = f"L{field['sas_id_calibrator2']}"
                     cal2_full_path = os.path.join(
                         field["input_location"], "calibrator", ms_folder
                     )
@@ -332,7 +332,7 @@ def pilot_single_target():
                 calibrator_downloaded = False
 
             stage_target = False
-            ms_folder = f"L{field['target_sas_id']}"
+            ms_folder = f"L{field['sas_id_target']}"
             target_full_path = os.path.join(
                 field["input_location"], "target", ms_folder
             )
@@ -357,11 +357,11 @@ def pilot_single_target():
                 target_downloaded = False
 
             if stage_calibrators or stage_target:
-                print(f"Field {field['target_sas_id']} is not downloaded.")
+                print(f"Field {field['sas_id_target']} is not downloaded.")
                 stager = ObservationStager(get_surls=True)
                 try:
                     target_coordinates = parse_target_coordinates(
-                        field.get("field_name") or ""
+                        field.get("target_name") or ""
                     )
                     if target_coordinates is not None:
                         print(
@@ -392,7 +392,7 @@ def pilot_single_target():
                         if not position_matches:
                             raise ValueError(
                                 "Position search found no SAS ID/SAPI matches for "
-                                f"{field['field_name']!r}."
+                                f"{field['target_name']!r}."
                             )
                         exact_sasid_matches = [
                             match
@@ -428,7 +428,7 @@ def pilot_single_target():
                     else:
                         stager.find_observation_by_sasid(
                             "ALL",
-                            field["target_sas_id"],
+                            field["sas_id_target"],
                             None,
                             minfreq,
                             maxfreq,
@@ -441,20 +441,20 @@ def pilot_single_target():
                             ]
                             if len(usable_saps) > 1:
                                 raise ValueError(
-                                    f"Target name {field['field_name']!r} is not a "
+                                    f"Target name {field['target_name']!r} is not a "
                                     "coordinate, and observation "
-                                    f"{field['target_sas_id']} has {len(usable_saps)} "
+                                    f"{field['sas_id_target']} has {len(usable_saps)} "
                                     "usable SAPs. Provide coordinates to select a beam."
                                 )
                 except SystemExit as err:
                     raise AirflowFailException(
                         "flocs-lta could not resolve a unique observation for "
-                        f"{field['field_name']} ({field['target_sas_id']})."
+                        f"{field['target_name']} ({field['sas_id_target']})."
                     ) from err
                 except ValueError as err:
                     raise AirflowFailException(
                         f"Could not select a target beam for "
-                        f"{field['field_name']} ({field['target_sas_id']}): {err}"
+                        f"{field['target_name']} ({field['sas_id_target']}): {err}"
                     ) from err
                 expected = field["number_subbands"]
                 if expected is not None and len(stager.target_uris) != expected:
@@ -464,18 +464,18 @@ def pilot_single_target():
                 if stage_calibrators:
                     stager.find_nearest_calibrators(2, 120, 168)
                     CURRENT_DB.set_field_downloading(
-                        field["field_name"], database_target_sasid
+                        field["target_name"], database_target_sasid
                     )
                     stage_id_calibrators = stager.stage_calibrators()
                 if stage_target:
                     if not stage_calibrators:
                         CURRENT_DB.set_field_downloading(
-                            field["field_name"], database_target_sasid
+                            field["target_name"], database_target_sasid
                         )
                     stage_id_target = stager.stage_target()
             else:
                 check_target_subbands(field)
-                CURRENT_DB.set_field_downloaded(field["field_name"], field["target_sas_id"])
+                CURRENT_DB.set_field_downloaded(field["target_name"], field["sas_id_target"])
                 return field
 
             calibrator_staged = False
@@ -507,11 +507,11 @@ def pilot_single_target():
                         cmd = f"flocs-lta download --outdir {dl_path} {stage_id_calibrators}"
                         with (
                             open(
-                                f"log_download_calibrators_{field['field_name']}.txt",
+                                f"log_download_calibrators_{field['target_name']}.txt",
                                 "w+",
                             ) as f_out,
                             open(
-                                f"log_download_calibrators_{field['field_name']}_err.txt",
+                                f"log_download_calibrators_{field['target_name']}_err.txt",
                                 "w+",
                             ) as f_err,
                         ):
@@ -542,11 +542,11 @@ def pilot_single_target():
                         cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
                         with (
                             open(
-                                f"log_download_target_{field['field_name']}.txt",
+                                f"log_download_target_{field['target_name']}.txt",
                                 "w+",
                             ) as f_out,
                             open(
-                                f"log_download_target_{field['field_name']}_err.txt",
+                                f"log_download_target_{field['target_name']}_err.txt",
                                 "w+",
                             ) as f_err,
                         ):
@@ -559,27 +559,27 @@ def pilot_single_target():
                                     database_target_sasid, actual_sasid
                                 )
                                 database_target_sasid = actual_sasid
-                                field["target_sas_id"] = actual_sasid
+                                field["sas_id_target"] = actual_sasid
                                 target_downloaded = True
                             else:
                                 raise RuntimeError
                 if calibrator_downloaded and target_downloaded:
                     CURRENT_DB.update_target_sas_id(database_target_sasid, actual_sasid)
-                    field["target_sas_id"] = actual_sasid
+                    field["sas_id_target"] = actual_sasid
                     check_target_subbands(field)
-                    CURRENT_DB.set_field_downloaded(field["field_name"], actual_sasid)
+                    CURRENT_DB.set_field_downloaded(field["target_name"], actual_sasid)
                     break
                 time.sleep(60)
             return field
 
     @task
     def run_linc_calibrator1(field):
-        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
-        if not field["calibrator1_sas_id"]:
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        if not field["sas_id_calibrator1"]:
             raise AirflowSkipException("Calibrator 1 does not exist, skipping.")
         if step_finished(field, "calibrator1"):
             print(
-                f"Flux density calibrator {field['calibrator1_sas_id']} for observation {field['field_name']} {field['target_sas_id']} already processed."
+                f"Flux density calibrator {field['sas_id_calibrator1']} for observation {field['target_name']} {field['sas_id_target']} already processed."
             )
             return field
         else:
@@ -594,12 +594,12 @@ def pilot_single_target():
     @task
     def run_linc_calibrator2(field):
         print(field)
-        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
-        if not field["calibrator2_sas_id"]:
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+        if not field["sas_id_calibrator2"]:
             raise AirflowSkipException("Calibrator 2 does not exist, skipping.")
         if step_finished(field, "calibrator2"):
             print(
-                f"Flux density calibrator {field['calibrator2_sas_id']} for observation {field['field_name']} {field['target_sas_id']} already processed."
+                f"Flux density calibrator {field['sas_id_calibrator2']} for observation {field['target_name']} {field['sas_id_target']} already processed."
             )
             return field
         else:
@@ -613,30 +613,30 @@ def pilot_single_target():
 
     @task(trigger_rule=TriggerRule.ALL_DONE)
     def select_best_calibrator(field, result1, result2):
-        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         result1 = field if (
-            field["calibrator1_sas_id"] and field["status_calibrator1"] == PIPELINE_STATUS.finished.value
+            field["sas_id_calibrator1"] and field["status_calibrator1"] == PIPELINE_STATUS.finished.value
         ) else None
         result2 = field if (
-            field["calibrator2_sas_id"] and field["status_calibrator2"] == PIPELINE_STATUS.finished.value
+            field["sas_id_calibrator2"] and field["status_calibrator2"] == PIPELINE_STATUS.finished.value
         ) else None
-        selected = field["selected_calibrator_sas_id"]
-        if (result1 and selected == field["calibrator1_sas_id"]) or (
-            result2 and selected == field["calibrator2_sas_id"]
+        selected = field["sas_id_calibrator_final"]
+        if (result1 and selected == field["sas_id_calibrator1"]) or (
+            result2 and selected == field["sas_id_calibrator2"]
         ):
             return field
         if result1 and (not result2):
             print("Only cal 1 succeeded, continuing with that")
             CURRENT_DB.set_final_calibrator(
-                result1["field_name"], result1["target_sas_id"], result1["calibrator1_sas_id"]
+                result1["target_name"], result1["sas_id_target"], result1["sas_id_calibrator1"]
             )
             return result1
         elif (not result1) and result2:
             print("Only cal 2 succeeded, continuing with that")
             CURRENT_DB.set_final_calibrator(
-                result2["field_name"],
-                result2["target_sas_id"],
-                result2["calibrator2_sas_id"],
+                result2["target_name"],
+                result2["sas_id_target"],
+                result2["sas_id_calibrator2"],
             )
             return result2
         elif result1 and result2:
@@ -648,29 +648,29 @@ def pilot_single_target():
                 )
                 if cal == 1:
                     CURRENT_DB.set_final_calibrator(
-                        result1["field_name"],
-                        result1["target_sas_id"],
-                        result1["calibrator1_sas_id"],
+                        result1["target_name"],
+                        result1["sas_id_target"],
+                        result1["sas_id_calibrator1"],
                     )
                     return result1
                 elif cal == 2:
                     CURRENT_DB.set_final_calibrator(
-                        result2["field_name"],
-                        result2["target_sas_id"],
-                        result2["calibrator2_sas_id"],
+                        result2["target_name"],
+                        result2["sas_id_target"],
+                        result2["sas_id_calibrator2"],
                     )
                     return result2
             else:
                 outdir = result1["output_location"]
                 calibrator1_path = get_most_recent_run(
-                    outdir, result1["calibrator1_sas_id"], "LINC_calibrator"
+                    outdir, result1["sas_id_calibrator1"], "LINC_calibrator"
                 )
                 calibrator1_solutions = (
                     calibrator1_path / "results_LINC_calibrator" / "cal_solutions.h5"
                 )
 
                 calibrator2_path = get_most_recent_run(
-                    outdir, result2["calibrator2_sas_id"], "LINC_calibrator"
+                    outdir, result2["sas_id_calibrator2"], "LINC_calibrator"
                 )
                 calibrator2_solutions = (
                     calibrator2_path / "results_LINC_calibrator" / "cal_solutions.h5"
@@ -691,17 +691,17 @@ def pilot_single_target():
                     case True:
                         print("Best score for calibrator1")
                         CURRENT_DB.set_final_calibrator(
-                            result1["field_name"],
-                            result1["target_sas_id"],
-                            result1["calibrator1_sas_id"],
+                            result1["target_name"],
+                            result1["sas_id_target"],
+                            result1["sas_id_calibrator1"],
                         )
                         return result1
                     case False:
                         print("Best score for calibrator2")
                         CURRENT_DB.set_final_calibrator(
-                            result2["field_name"],
-                            result2["target_sas_id"],
-                            result2["calibrator2_sas_id"],
+                            result2["target_name"],
+                            result2["sas_id_target"],
+                            result2["sas_id_calibrator2"],
                         )
                         return result2
         else:
@@ -709,7 +709,7 @@ def pilot_single_target():
 
     @task
     def run_linc_target(field):
-        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if step_finished(field, "target"):
             return field
         else:
@@ -727,7 +727,7 @@ def pilot_single_target():
 
     @task(retries=0, retry_delay=datetime.timedelta(seconds=5))
     def run_vlbi_delay(field):
-        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if step_finished(field, "vlbi_delay"):
             return field
         else:
@@ -741,7 +741,7 @@ def pilot_single_target():
 
     @task
     def run_vlbi_ddcal(field):
-        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if step_finished(field, "vlbi_dd"):
             return field
         else:
@@ -755,12 +755,12 @@ def pilot_single_target():
 
     @task
     def finish_field(field):
-        field = dict(CURRENT_DB.get_db_columns(field["target_sas_id"])[0])
+        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         if field["status_vlbi_dd"] != PIPELINE_STATUS.finished.value:
             raise AirflowFailException("DD calibration has not finished.")
         context = get_current_context()
         CURRENT_DB.set_field_finished(
-            field["field_name"], field["target_sas_id"],
+            field["target_name"], field["sas_id_target"],
             run_id=f"{context['dag'].dag_id}:{context['dag_run'].run_id}",
         )
         return field

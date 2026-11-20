@@ -72,8 +72,8 @@ def check_target_subbands(field):
     expected = field.get("number_subbands")
     if expected is None:
         return
-    input_root = field.get("input_location") or os.path.join(DATA_DIR, field["field_name"])
-    target = pathlib.Path(input_root) / "target" / f"L{field['target_sas_id']}"
+    input_root = field.get("input_location") or os.path.join(DATA_DIR, field["target_name"])
+    target = pathlib.Path(input_root) / "target" / f"L{field['sas_id_target']}"
     actual = sum(ms.is_dir() for ms in target.glob("*.MS"))
     if actual != expected:
         raise AirflowFailException(
@@ -123,7 +123,7 @@ def read_validation_scores(path: pathlib.Path, dd: bool = False) -> dict:
 
 
 def get_delay_solution(field, db, outdir):
-    run = get_most_recent_run(outdir, field["target_sas_id"], "VLBI_delay-calibration")
+    run = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay-calibration")
     results = run / "results_VLBI_delay-calibration"
     solutions = list(results.glob("merged*selfcalcycle???_linearfulljones*.h5"))
     if not solutions:
@@ -146,7 +146,7 @@ def get_delay_solution(field, db, outdir):
     if source == solution.name:
         source = direction
     db.set_delay_calibrator(
-        field["field_name"], field["target_sas_id"], source, phase_score, amp_score
+        field["target_name"], field["sas_id_target"], source, phase_score, amp_score
     )
     return solution
 
@@ -155,12 +155,12 @@ def finish_delay_calibration(field, db, outdir):
     try:
         get_delay_solution(field, db, outdir)
     except Exception:
-        db.set_status_failed(field["field_name"], "vlbi_delay", field["target_sas_id"])
+        db.set_status_failed(field["target_name"], "vlbi_delay", field["sas_id_target"])
         raise
     if NEEDS_MANUAL_APPROVAL_DELAY:
-        db.set_status_await_approval(field["field_name"], "vlbi_delay", field["target_sas_id"])
+        db.set_status_await_approval(field["target_name"], "vlbi_delay", field["sas_id_target"])
     else:
-        db.set_status_finished(field["field_name"], "vlbi_delay", field["target_sas_id"])
+        db.set_status_finished(field["target_name"], "vlbi_delay", field["sas_id_target"])
 
 
 def get_dd_calibrator_scores(results: pathlib.Path) -> tuple:
@@ -211,48 +211,48 @@ def get_dd_calibrator_scores(results: pathlib.Path) -> tuple:
 
 def finish_dd_calibration(field, db, outdir):
     try:
-        run = get_most_recent_run(outdir, field["target_sas_id"], "VLBI_dd-calibration")
+        run = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_dd-calibration")
         results = run / "results_VLBI_dd-calibration"
         if not results.is_dir() or (
             field["pipelines"] == "vlbi-widefield" and not (results / "merged.h5").is_file()
         ):
             raise AirflowFailException(f"Missing final DD calibration output in {results}.")
         db.set_dd_calibrator_scores(
-            field["field_name"], field["target_sas_id"], *get_dd_calibrator_scores(results)
+            field["target_name"], field["sas_id_target"], *get_dd_calibrator_scores(results)
         )
     except Exception:
-        db.set_status_failed(field["field_name"], "vlbi_dd", field["target_sas_id"])
+        db.set_status_failed(field["target_name"], "vlbi_dd", field["sas_id_target"])
         raise
-    db.set_status_finished(field["field_name"], "vlbi_dd", field["target_sas_id"])
+    db.set_status_finished(field["target_name"], "vlbi_dd", field["sas_id_target"])
 
 
 def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
     print(
-        f"Processing flux density calibrator {field[f'calibrator{calibrator_field}_sas_id']} for observation {field['field_name']} {field['target_sas_id']}"
+        f"Processing flux density calibrator {field[f'sas_id_calibrator{calibrator_field}']} for observation {field['target_name']} {field['sas_id_target']}"
     )
-    ms_folder = f"L{field[f'calibrator{calibrator_field}_sas_id']}"
+    ms_folder = f"L{field[f'sas_id_calibrator{calibrator_field}']}"
     db.set_status_processing(
-        field["field_name"], f"calibrator{calibrator_field}", field["target_sas_id"]
+        field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"]
     )
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
-    cmd = f"flocs-run linc calibrator --runner cwltool --scheduler slurm --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} {os.path.join(field.get('input_location') or os.path.join(DATA_DIR, field['field_name']), 'calibrator', ms_folder)}"
+    cmd = f"flocs-run linc calibrator --runner cwltool --scheduler slurm --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} {os.path.join(field.get('input_location') or os.path.join(DATA_DIR, field['target_name']), 'calibrator', ms_folder)}"
     with (
         open(
             os.path.join(
                 logsdir,
-                f"log_LINC_calibrator_{field['field_name']}_{field[f'calibrator{calibrator_field}_sas_id']}.txt",
+                f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}.txt",
             ),
             "w+",
         ) as f_out,
         open(
             os.path.join(
                 logsdir,
-                f"log_LINC_calibrator_{field['field_name']}_{field[f'calibrator{calibrator_field}_sas_id']}_err.txt",
+                f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -265,11 +265,11 @@ def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
                 if "Submitted batch job" in line:
                     jobid = line.strip().split()[-1]
         else:
-            db.set_status_failed(field["field_name"], f"calibrator{calibrator_field}", field["target_sas_id"])
+            db.set_status_failed(field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"])
             raise RuntimeError("Failed to submit job.")
 
         if not jobid:
-            db.set_status_failed(field["field_name"], f"calibrator{calibrator_field}", field["target_sas_id"])
+            db.set_status_failed(field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"])
             raise RuntimeError("Failed to retrieve job id")
         else:
             while True:
@@ -282,9 +282,9 @@ def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
                     time.sleep(60)
                 elif status == "COMPLETED":
                     db.set_status_finished(
-                        field["field_name"],
+                        field["target_name"],
                         f"calibrator{calibrator_field}",
-                        field["target_sas_id"],
+                        field["sas_id_target"],
                     )
                     break
                 elif (
@@ -292,40 +292,40 @@ def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
                     or ("TIMEOUT" in status)
                     or ("CANCELLED" in status)
                 ):
-                    db.set_status_failed(field["field_name"], f"calibrator{calibrator_field}", field["target_sas_id"])
+                    db.set_status_failed(field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"])
                     raise RuntimeError(
-                        f"LINC calibrator for {field['field_name']} {field['target_sas_id']} failed."
+                        f"LINC calibrator for {field['target_name']} {field['sas_id_target']} failed."
                     )
 
 
 def run_linc_calibrator_toil(field, calibrator_field: int, db: FlocsDB):
     print(
-        f"Processing flux density calibrator {field[f'calibrator{calibrator_field}_sas_id']} for observation {field['field_name']} {field['target_sas_id']}"
+        f"Processing flux density calibrator {field[f'sas_id_calibrator{calibrator_field}']} for observation {field['target_name']} {field['sas_id_target']}"
     )
-    ms_folder = f"L{field[f'calibrator{calibrator_field}_sas_id']}"
+    ms_folder = f"L{field[f'sas_id_calibrator{calibrator_field}']}"
     db.set_status_processing(
-        field["field_name"], f"calibrator{calibrator_field}", field["target_sas_id"]
+        field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"]
     )
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
-    cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} {os.path.join(field.get('input_location') or os.path.join(DATA_DIR, field['field_name']), 'calibrator', ms_folder)}"
+    cmd = f"flocs-run linc calibrator --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} {os.path.join(field.get('input_location') or os.path.join(DATA_DIR, field['target_name']), 'calibrator', ms_folder)}"
     print(cmd)
     with (
         open(
             os.path.join(
                 logsdir,
-                f"log_LINC_calibrator_{field['field_name']}_{field[f'calibrator{calibrator_field}_sas_id']}.txt",
+                f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}.txt",
             ),
             "w+",
         ) as f_out,
         open(
             os.path.join(
                 logsdir,
-                f"log_LINC_calibrator_{field['field_name']}_{field[f'calibrator{calibrator_field}_sas_id']}_err.txt",
+                f"log_LINC_calibrator_{field['target_name']}_{field[f'sas_id_calibrator{calibrator_field}']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -339,48 +339,48 @@ def run_linc_calibrator_toil(field, calibrator_field: int, db: FlocsDB):
                 success = True
         if success:
             db.set_status_finished(
-                field["field_name"],
+                field["target_name"],
                 f"calibrator{calibrator_field}",
-                field["target_sas_id"],
+                field["sas_id_target"],
             )
         else:
-            db.set_status_failed(field["field_name"], f"calibrator{calibrator_field}", field["target_sas_id"])
+            db.set_status_failed(field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"])
             raise RuntimeError
 
 
 def run_linc_target_cwltool(field, db: FlocsDB):
     check_target_subbands(field)
     print(
-        f"Processing target observation {field['field_name']} {field['target_sas_id']} with calibrator {field['selected_calibrator_sas_id']}"
+        f"Processing target observation {field['target_name']} {field['sas_id_target']} with calibrator {field['sas_id_calibrator_final']}"
     )
-    ms_folder = f"L{field['target_sas_id']}"
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    ms_folder = f"L{field['sas_id_target']}"
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
     calibrator_path = get_most_recent_run(
-        outdir, field["selected_calibrator_sas_id"], "LINC_calibrator"
+        outdir, field["sas_id_calibrator_final"], "LINC_calibrator"
     )
     calibrator_solutions = (
         calibrator_path / "results_LINC_calibrator" / "cal_solutions.h5"
     )
-    db.set_status_processing(field["field_name"], "target", field["target_sas_id"])
-    cmd = f"flocs-run linc target --runner cwltool --scheduler slurm --slurm-cores 64 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} --output-fullres-data --cal-solutions {calibrator_solutions} {os.path.join(field.get('input_location') or os.path.join(DATA_DIR, field['field_name']), 'target', ms_folder)}"
+    db.set_status_processing(field["target_name"], "target", field["sas_id_target"])
+    cmd = f"flocs-run linc target --runner cwltool --scheduler slurm --slurm-cores 64 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} --output-fullres-data --cal-solutions {calibrator_solutions} {os.path.join(field.get('input_location') or os.path.join(DATA_DIR, field['target_name']), 'target', ms_folder)}"
     print(cmd)
     with (
         open(
             os.path.join(
                 logsdir,
-                f"log_LINC_target_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
             ),
             "w+",
         ) as f_out,
         open(
             os.path.join(
                 logsdir,
-                f"log_LINC_target_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -393,7 +393,7 @@ def run_linc_target_cwltool(field, db: FlocsDB):
                 if "Submitted batch job" in line:
                     jobid = line.strip().split()[-1]
         else:
-            db.set_status_failed(field["field_name"], "target", field["target_sas_id"])
+            db.set_status_failed(field["target_name"], "target", field["sas_id_target"])
             raise RuntimeError("Failed to submit job.")
 
         if not jobid:
@@ -409,9 +409,9 @@ def run_linc_target_cwltool(field, db: FlocsDB):
                     time.sleep(60)
                 elif status == "COMPLETED":
                     db.set_status_finished(
-                        field["field_name"],
+                        field["target_name"],
                         "target",
-                        field["target_sas_id"],
+                        field["sas_id_target"],
                     )
                     break
                 elif (
@@ -419,42 +419,42 @@ def run_linc_target_cwltool(field, db: FlocsDB):
                     or ("TIMEOUT" in status)
                     or ("CANCELLED" in status)
                 ):
-                    db.set_status_failed(field["field_name"], "target", field["target_sas_id"])
+                    db.set_status_failed(field["target_name"], "target", field["sas_id_target"])
                     raise RuntimeError(
-                        f"LINC target for {field['field_name']} {field['target_sas_id']} failed."
+                        f"LINC target for {field['target_name']} {field['sas_id_target']} failed."
                     )
 
 
 def run_linc_target_toil(field, db: FlocsDB):
     check_target_subbands(field)
     print(
-        f"Processing target observation {field['field_name']} {field['target_sas_id']} with calibrator {field['selected_calibrator_sas_id']}"
+        f"Processing target observation {field['target_name']} {field['sas_id_target']} with calibrator {field['sas_id_calibrator_final']}"
     )
-    ms_folder = f"L{field['target_sas_id']}"
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    ms_folder = f"L{field['sas_id_target']}"
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
     calibrator_path = get_most_recent_run(
-        outdir, field["selected_calibrator_sas_id"], "LINC_calibrator"
+        outdir, field["sas_id_calibrator_final"], "LINC_calibrator"
     )
     calibrator_solutions = (
         calibrator_path / "results_LINC_calibrator" / "cal_solutions.h5"
     )
-    db.set_status_processing(field["field_name"], "target", field["target_sas_id"])
+    db.set_status_processing(field["target_name"], "target", field["sas_id_target"])
     context = get_current_context()
     log_path = os.path.join(
         logsdir,
-        f"log_LINC_target_{field['field_name']}_{field['target_sas_id']}.txt",
+        f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt",
     )
     if context["ti"].try_number == 1 or not os.path.isfile(log_path):
-        cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} --output-fullres-data --cal-solutions {calibrator_solutions} {os.path.join(field.get('input_location') or os.path.join(DATA_DIR, field['field_name']), 'target', ms_folder)}"
+        cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} --output-fullres-data --cal-solutions {calibrator_solutions} {os.path.join(field.get('input_location') or os.path.join(DATA_DIR, field['target_name']), 'target', ms_folder)}"
     else:
         flocs_workdir = ""
         print(
-            f"Scanning log_LINC_target_{field['field_name']}_{field['target_sas_id']}.txt for workdir."
+            f"Scanning log_LINC_target_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
         )
         with open(log_path) as f_out:
             for line in f_out.readlines():
@@ -467,7 +467,7 @@ def run_linc_target_toil(field, db: FlocsDB):
                 "Could not retrieve LINC target workdir. Flocs probably crashed before launching."
             )
         print(f"Resuming failed LINC target run in {flocs_workdir}")
-        cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --output-fullres-data --cal-solutions {calibrator_solutions} {os.path.join(field.get('input_location') or os.path.join(DATA_DIR, field['field_name']), 'target', ms_folder)}"
+        cmd = f"flocs-run linc target --runner toil --scheduler slurm --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --output-fullres-data --cal-solutions {calibrator_solutions} {os.path.join(field.get('input_location') or os.path.join(DATA_DIR, field['target_name']), 'target', ms_folder)}"
     print(cmd)
     with (
         open(
@@ -477,7 +477,7 @@ def run_linc_target_toil(field, db: FlocsDB):
         open(
             os.path.join(
                 logsdir,
-                f"log_LINC_target_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                f"log_LINC_target_{field['target_name']}_{field['sas_id_target']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -491,26 +491,26 @@ def run_linc_target_toil(field, db: FlocsDB):
                 success = True
         if success:
             db.set_status_finished(
-                field["field_name"], "target", field["target_sas_id"],
+                field["target_name"], "target", field["sas_id_target"],
             )
         else:
-            db.set_status_failed(field["field_name"], "target", field["target_sas_id"])
+            db.set_status_failed(field["target_name"], "target", field["sas_id_target"])
             raise RuntimeError
 
 
 def run_pilot_delay_cwltool(field, db: FlocsDB, mode="widefield"):
     print(
-        f"Processing delay calibration for {field['field_name']} {field['target_sas_id']}"
+        f"Processing delay calibration for {field['target_name']} {field['sas_id_target']}"
     )
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
-    target_path = get_most_recent_run(outdir, field["target_sas_id"], "LINC_target")
+    target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
     target_ms_path = target_path / "results_LINC_target" / "results"
-    db.set_status_processing(field["field_name"], "vlbi_delay", field["target_sas_id"])
+    db.set_status_processing(field["target_name"], "vlbi_delay", field["sas_id_target"])
 
     delay_cat = os.path.join(outdir, "delay_calibrators.csv")
     image_cat = os.path.join(outdir, "image_catalogue.csv")
@@ -522,14 +522,14 @@ def run_pilot_delay_cwltool(field, db: FlocsDB, mode="widefield"):
             open(
                 os.path.join(
                     logsdir,
-                    f"log_plot_field_{field['field_name']}_{field['target_sas_id']}.txt",
+                    f"log_plot_field_{field['target_name']}_{field['sas_id_target']}.txt",
                 ),
                 "w+",
             ) as f_out,
             open(
                 os.path.join(
                     logsdir,
-                    f"log_plot_field_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                    f"log_plot_field_{field['target_name']}_{field['sas_id_target']}_err.txt",
                 ),
                 "w+",
             ) as f_err,
@@ -567,14 +567,14 @@ def run_pilot_delay_cwltool(field, db: FlocsDB, mode="widefield"):
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_delay-calibration_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
             ),
             "w+",
         ) as f_out,
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_delay-calibration_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -587,7 +587,7 @@ def run_pilot_delay_cwltool(field, db: FlocsDB, mode="widefield"):
                 if "Submitted batch job" in line:
                     jobid = line.strip().split()[-1]
         else:
-            db.set_status_failed(field["field_name"], "vlbi_delay", field["target_sas_id"])
+            db.set_status_failed(field["target_name"], "vlbi_delay", field["sas_id_target"])
             raise RuntimeError("Failed to submit job.")
 
         if not jobid:
@@ -609,25 +609,25 @@ def run_pilot_delay_cwltool(field, db: FlocsDB, mode="widefield"):
                     or ("TIMEOUT" in status)
                     or ("CANCELLED" in status)
                 ):
-                    db.set_status_failed(field["field_name"], "vlbi_delay", field["target_sas_id"])
+                    db.set_status_failed(field["target_name"], "vlbi_delay", field["sas_id_target"])
                     raise RuntimeError(
-                        f"PILOT delay calibration for {field['field_name']} {field['target_sas_id']} failed."
+                        f"PILOT delay calibration for {field['target_name']} {field['sas_id_target']} failed."
                     )
 
 
 def run_pilot_delay_toil(field, db: FlocsDB, mode="widefield"):
     print(
-        f"Processing delay calibration for {field['field_name']} {field['target_sas_id']}"
+        f"Processing delay calibration for {field['target_name']} {field['sas_id_target']}"
     )
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
-    target_path = get_most_recent_run(outdir, field["target_sas_id"], "LINC_target")
+    target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
     target_ms_path = target_path / "results_LINC_target" / "results"
-    db.set_status_processing(field["field_name"], "vlbi_delay", field["target_sas_id"])
+    db.set_status_processing(field["target_name"], "vlbi_delay", field["sas_id_target"])
 
     delay_cat = os.path.join(outdir, "delay_calibrators.csv")
     image_cat = os.path.join(outdir, "image_catalogue.csv")
@@ -639,14 +639,14 @@ def run_pilot_delay_toil(field, db: FlocsDB, mode="widefield"):
             open(
                 os.path.join(
                     logsdir,
-                    f"log_plot_field_{field['field_name']}_{field['target_sas_id']}.txt",
+                    f"log_plot_field_{field['target_name']}_{field['sas_id_target']}.txt",
                 ),
                 "w+",
             ) as f_out,
             open(
                 os.path.join(
                     logsdir,
-                    f"log_plot_field_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                    f"log_plot_field_{field['target_name']}_{field['sas_id_target']}_err.txt",
                 ),
                 "w+",
             ) as f_err,
@@ -678,7 +678,7 @@ def run_pilot_delay_toil(field, db: FlocsDB, mode="widefield"):
         not os.path.isfile(
             os.path.join(
                 logsdir,
-                f"log_VLBI_delay-calibration_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
             )
         )
     ):
@@ -690,12 +690,12 @@ def run_pilot_delay_toil(field, db: FlocsDB, mode="widefield"):
         # Extract the previous working directory
         flocs_workdir = ""
         print(
-            f"Scanning log_VLBI_delay-calibration_{field['field_name']}_{field['target_sas_id']}.txt for workdir."
+            f"Scanning log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
         )
         with open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_delay-calibration_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
             )
         ) as f_out:
             for line in f_out.readlines():
@@ -716,14 +716,14 @@ def run_pilot_delay_toil(field, db: FlocsDB, mode="widefield"):
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_delay-calibration_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
             ),
             "w+",
         ) as f_out,
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_delay-calibration_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                f"log_VLBI_delay-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -739,15 +739,15 @@ def run_pilot_delay_toil(field, db: FlocsDB, mode="widefield"):
         if success:
             finish_delay_calibration(field, db, outdir)
         else:
-            db.set_status_failed(field["field_name"], "vlbi_delay", field["target_sas_id"])
+            db.set_status_failed(field["target_name"], "vlbi_delay", field["sas_id_target"])
             raise RuntimeError
 
 
 def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
     print(
-        f"Processing ILT dd calibration for {field['field_name']} {field['target_sas_id']}"
+        f"Processing ILT dd calibration for {field['target_name']} {field['sas_id_target']}"
     )
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
@@ -755,19 +755,19 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
         os.makedirs(logsdir, exist_ok=True)
     if field["pipelines"] == "vlbi-single-target":
         print("Not a widefield imaging run, checking LINC + delay calibration.")
-        target_path = get_most_recent_run(outdir, field["target_sas_id"], "LINC_target")
+        target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
         target_ms_path = target_path / "results_LINC_target" / "results"
         print(f"Using LINC target run: {target_path}")
 
         sols = get_delay_solution(field, db, outdir)
         print(f"Using PILOT delay calibration solutions: {sols}")
 
-        source_cat = os.path.join(field.get("input_location") or os.path.join(DATA_DIR, field["field_name"]), "vlbi_target.csv")
+        source_cat = os.path.join(field.get("input_location") or os.path.join(DATA_DIR, field["target_name"]), "vlbi_target.csv")
         if not os.path.isfile(source_cat):
             raise AirflowFailException(f"{source_cat} not found.")
 
         db.set_status_processing(
-            field["field_name"], "vlbi_dd", field["target_sas_id"]
+            field["target_name"], "vlbi_dd", field["sas_id_target"]
         )
         if mode == "widefield":
             cmd = f"flocs-run vlbi dd-calibration --runner cwltool --scheduler slurm --slurm-cores 32 --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat {target_ms_path}"
@@ -776,19 +776,19 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
     else:
         print("Widefield imaging run, checking subtraction output.")
         target_path = get_most_recent_run(
-            outdir, field["target_sas_id"], "VLBI_process-ddf"
+            outdir, field["sas_id_target"], "VLBI_process-ddf"
         )
         target_ms_path = target_path / "results_VLBI_process-ddf"
         print(f"Using subtracted data at: {target_path}")
 
-        source_cat = os.path.join(field.get("input_location") or os.path.join(DATA_DIR, field["field_name"]), "image_catalogue.csv")
+        source_cat = os.path.join(field.get("input_location") or os.path.join(DATA_DIR, field["target_name"]), "image_catalogue.csv")
         if not os.path.isfile(source_cat):
             source_cat = os.path.join(outdir, "image_catalogue.csv")
         if not os.path.isfile(source_cat):
             raise AirflowFailException(f"{source_cat} not found.")
 
         db.set_status_processing(
-            field["field_name"], "vlbi_dd", field["target_sas_id"]
+            field["target_name"], "vlbi_dd", field["sas_id_target"]
         )
 
         cmd = f"flocs-run vlbi dd-calibration --runner cwltool --scheduler slurm --slurm-cores 64 --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
@@ -799,14 +799,14 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_dd-calibration_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
             ),
             "w+",
         ) as f_out,
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_dd-calibration_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -819,7 +819,7 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
                 if "Submitted batch job" in line:
                     jobid = line.strip().split()[-1]
         else:
-            db.set_status_failed(field["field_name"], "vlbi_dd", field["target_sas_id"])
+            db.set_status_failed(field["target_name"], "vlbi_dd", field["sas_id_target"])
             raise RuntimeError("Failed to submit job.")
 
         if not jobid:
@@ -841,18 +841,18 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
                     or ("TIMEOUT" in status)
                     or ("CANCELLED" in status)
                 ):
-                    db.set_status_failed(field["field_name"], "vlbi_dd", field["target_sas_id"])
+                    db.set_status_failed(field["target_name"], "vlbi_dd", field["sas_id_target"])
                     raise RuntimeError(
-                        f"PILOT direction-dependent calibration for {field['field_name']} {field['target_sas_id']} failed."
+                        f"PILOT direction-dependent calibration for {field['target_name']} {field['sas_id_target']} failed."
                     )
 
 
 def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
     print(
-        f"Processing ILT dd calibration for {field['field_name']} {field['target_sas_id']}"
+        f"Processing ILT dd calibration for {field['target_name']} {field['sas_id_target']}"
     )
-    prior_status = db.get_step_status(field["field_name"], 'vlbi_dd', field["target_sas_id"])
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    prior_status = db.get_step_status(field["target_name"], 'vlbi_dd', field["sas_id_target"])
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
@@ -860,19 +860,19 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
         os.makedirs(logsdir, exist_ok=True)
     if field["pipelines"] == "vlbi-single-target":
         print("Not a widefield imaging run, checking LINC + delay calibration.")
-        target_path = get_most_recent_run(outdir, field["target_sas_id"], "LINC_target")
+        target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
         target_ms_path = target_path / "results_LINC_target" / "results"
         print(f"Using LINC target run: {target_path}")
 
         sols = get_delay_solution(field, db, outdir)
         print(f"Using PILOT delay calibration solutions: {sols}")
 
-        source_cat = os.path.join(field.get("input_location") or os.path.join(DATA_DIR, field["field_name"]), "vlbi_target.csv")
+        source_cat = os.path.join(field.get("input_location") or os.path.join(DATA_DIR, field["target_name"]), "vlbi_target.csv")
         if not os.path.isfile(source_cat):
             raise AirflowFailException(f"{source_cat} not found.")
 
         db.set_status_processing(
-            field["field_name"], "vlbi_dd", field["target_sas_id"]
+            field["target_name"], "vlbi_dd", field["sas_id_target"]
         )
         if mode == "widefield":
             cmd = f"flocs-run vlbi dd-calibration --runner toil --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat {target_ms_path}"
@@ -881,19 +881,19 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
     else:
         print("Widefield imaging run, checking subtraction output.")
         target_path = get_most_recent_run(
-            outdir, field["target_sas_id"], "VLBI_process-ddf"
+            outdir, field["sas_id_target"], "VLBI_process-ddf"
         )
         target_ms_path = target_path / "results_VLBI_process-ddf"
         print(f"Using subtracted data at: {target_path}")
 
-        source_cat = os.path.join(field.get("input_location") or os.path.join(DATA_DIR, field["field_name"]), "image_catalogue.csv")
+        source_cat = os.path.join(field.get("input_location") or os.path.join(DATA_DIR, field["target_name"]), "image_catalogue.csv")
         if not os.path.isfile(source_cat):
             source_cat = os.path.join(outdir, "image_catalogue.csv")
         if not os.path.isfile(source_cat):
             raise AirflowFailException(f"{source_cat} not found.")
 
         db.set_status_processing(
-            field["field_name"], "vlbi_dd", field["target_sas_id"]
+            field["target_name"], "vlbi_dd", field["sas_id_target"]
         )
 
         context = get_current_context()
@@ -901,7 +901,7 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
             not os.path.isfile(
                 os.path.join(
                     logsdir,
-                    f"log_VLBI_dd-calibration_{field['field_name']}_{field['target_sas_id']}.txt",
+                    f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
                 )
             )
         ):
@@ -914,12 +914,12 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
                 # Extract the previous working directory
                 flocs_workdir = ""
                 print(
-                    f"Scanning log_VLBI_dd-calibration_{field['field_name']}_{field['target_sas_id']}.txt for workdir."
+                    f"Scanning log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
                 )
                 with open(
                     os.path.join(
                         logsdir,
-                        f"log_VLBI_dd-calibration_{field['field_name']}_{field['target_sas_id']}.txt",
+                        f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
                     )
                 ) as f_out:
                     for line in f_out.readlines():
@@ -940,14 +940,14 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_dd-calibration_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}.txt",
             ),
             "w+",
         ) as f_out,
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_dd-calibration_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                f"log_VLBI_dd-calibration_{field['target_name']}_{field['sas_id_target']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -963,30 +963,30 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
             finish_dd_calibration(field, db, outdir)
         else:
             db.set_status_failed(
-                field["field_name"], "vlbi_dd", field["target_sas_id"]
+                field["target_name"], "vlbi_dd", field["sas_id_target"]
             )
             raise RuntimeError
 
 
 def run_pilot_intermediate_image_toil(field, db: FlocsDB):
     print(
-        f"Processing ILT intermediate resolution imaging for {field['field_name']} {field['target_sas_id']}"
+        f"Processing ILT intermediate resolution imaging for {field['target_name']} {field['sas_id_target']}"
     )
-    prior_status = db.get_step_status(field["field_name"], 'vlbi_intermediate_img', field["target_sas_id"])
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    prior_status = db.get_step_status(field["target_name"], 'vlbi_intermediate_img', field["sas_id_target"])
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(
-        outdir, field["target_sas_id"], "VLBI_process-ddf"
+        outdir, field["sas_id_target"], "VLBI_process-ddf"
     )
     target_ms_path = target_path / "results_VLBI_process-ddf"
     print(f"Using subtracted data at: {target_path}")
 
     dd_sols_path = get_most_recent_run(
-        outdir, field["target_sas_id"], "VLBI_dd-calibration"
+        outdir, field["sas_id_target"], "VLBI_dd-calibration"
     )
     dd_sols = dd_sols_path / "results_VLBI_dd-calibration" / "merged.h5"
     print(f"Using dd solutions: {dd_sols}")
@@ -995,7 +995,7 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
         raise AirflowFailException(f"{dd_sols} not found.")
 
     db.set_status_processing(
-        field["field_name"], "vlbi_intermediate_img", field["target_sas_id"]
+        field["target_name"], "vlbi_intermediate_img", field["sas_id_target"]
     )
 
     context = get_current_context()
@@ -1003,7 +1003,7 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
         not os.path.isfile(
             os.path.join(
                 logsdir,
-                f"log_VLBI_image_intermediate_resolution_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt",
             )
         )
     ):
@@ -1016,19 +1016,19 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
             # Extract the previous working directory
             flocs_workdir = ""
             print(
-                f"Scanning log_VLBI_image_intermediate_resolution_{field['field_name']}_{field['target_sas_id']}.txt for workdir."
+                f"Scanning log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
             )
             with (
                 open(
                     os.path.join(
                         logsdir,
-                        f"log_VLBI_image_intermediate_resolution_{field['field_name']}_{field['target_sas_id']}.txt",
+                        f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt",
                     )
                 ) as f_out,
                 open(
                     os.path.join(
                         logsdir,
-                        f"log_VLBI_image_intermediate_resolution_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                        f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}_err.txt",
                     )
                 ) as f_err,
             ):
@@ -1050,14 +1050,14 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_image_intermediate_resolution_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}.txt",
             ),
             "w+",
         ) as f_out,
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_image_intermediate_resolution_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                f"log_VLBI_image_intermediate_resolution_{field['target_name']}_{field['sas_id_target']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -1071,38 +1071,38 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
                 success = True
         if success:
             db.set_status_finished(
-                field["field_name"],
+                field["target_name"],
                 "vlbi_intermediate_img",
-                field["target_sas_id"],
+                field["sas_id_target"],
             )
         else:
             db.set_status_failed(
-                field["field_name"],
+                field["target_name"],
                 "vlbi_intermediate_img",
-                field["target_sas_id"],
+                field["sas_id_target"],
             )
             raise RuntimeError
 
 
 def run_pilot_facet_subtract_toil(field, db: FlocsDB):
     print(
-        f"Processing ILT facet subtraction for {field['field_name']} {field['target_sas_id']}"
+        f"Processing ILT facet subtraction for {field['target_name']} {field['sas_id_target']}"
     )
-    prior_status = db.get_step_status(field["field_name"], 'vlbi_facet_subtract', field["target_sas_id"])
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    prior_status = db.get_step_status(field["target_name"], 'vlbi_facet_subtract', field["sas_id_target"])
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(
-        outdir, field["target_sas_id"], "VLBI_process-ddf"
+        outdir, field["sas_id_target"], "VLBI_process-ddf"
     )
     target_ms_path = target_path / "results_VLBI_process-ddf"
     print(f"Using subtracted data at: {target_path}")
 
     dd_sols_path = get_most_recent_run(
-        outdir, field["target_sas_id"], "VLBI_dd-calibration"
+        outdir, field["sas_id_target"], "VLBI_dd-calibration"
     )
     dd_sols = dd_sols_path / "results_VLBI_dd-calibration" / "merged.h5"
     print(f"Using dd solutions at: {dd_sols}")
@@ -1111,7 +1111,7 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
         raise AirflowFailException(f"{dd_sols} not found.")
 
     model_images_path = get_most_recent_run(
-        outdir, field["target_sas_id"], "VLBI_image_intermediate_resolution"
+        outdir, field["sas_id_target"], "VLBI_image_intermediate_resolution"
     ) / "results_VLBI_image_intermediate_resolution"
     model_images = list(model_images_path.glob("*-????-model-fpb.fits"))
     print(f"Using model images at: {model_images_path}")
@@ -1122,7 +1122,7 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
         )
 
     db.set_status_processing(
-        field["field_name"], "vlbi_facet_subtract", field["target_sas_id"]
+        field["target_name"], "vlbi_facet_subtract", field["sas_id_target"]
     )
 
     context = get_current_context()
@@ -1130,7 +1130,7 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
         not os.path.isfile(
             os.path.join(
                 logsdir,
-                f"log_VLBI_facet-subtract_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt",
             )
         )
     ):
@@ -1143,12 +1143,12 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
             # Extract the previous working directory
             flocs_workdir = ""
             print(
-                f"Scanning log_VLBI_facet-subtract_{field['field_name']}_{field['target_sas_id']}.txt for workdir."
+                f"Scanning log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
             )
             with open(
                 os.path.join(
                     logsdir,
-                    f"log_VLBI_facet-subtract_{field['field_name']}_{field['target_sas_id']}.txt",
+                    f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt",
                 )
             ) as f_out:
                 for line in f_out.readlines():
@@ -1169,14 +1169,14 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_facet-subtract_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}.txt",
             ),
             "w+",
         ) as f_out,
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_facet-subtract_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                f"log_VLBI_facet-subtract_{field['target_name']}_{field['sas_id_target']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -1190,33 +1190,33 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
                 success = True
         if success:
             db.set_status_finished(
-                field["field_name"],
+                field["target_name"],
                 "vlbi_facet_subtract",
-                field["target_sas_id"],
+                field["sas_id_target"],
             )
         else:
             db.set_status_failed(
-                field["field_name"],
+                field["target_name"],
                 "vlbi_facet_subtract",
-                field["target_sas_id"],
+                field["sas_id_target"],
             )
             raise RuntimeError
 
 
 def run_pilot_facet_imaging_toil(field, db: FlocsDB, resolution: float = 6.0):
     print(
-        f"Processing ILT facet imaging for {field['field_name']} {field['target_sas_id']}"
+        f"Processing ILT facet imaging for {field['target_name']} {field['sas_id_target']}"
     )
     identifier = f"vlbi_facet_imaging_{resolution}"
-    prior_status = db.get_step_status(field["field_name"], identifier, field["target_sas_id"])
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    prior_status = db.get_step_status(field["target_name"], identifier, field["sas_id_target"])
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(
-        outdir, field["target_sas_id"], "VLBI_facet_subtract"
+        outdir, field["sas_id_target"], "VLBI_facet_subtract"
     )
     target_ms_path = target_path / "results_VLBI_facet_subtract"
     print(f"Using subtracted data at: {target_path}")
@@ -1229,7 +1229,7 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB, resolution: float = 6.0):
         )
 
     db.set_status_processing(
-        field["field_name"], identifier, field["target_sas_id"]
+        field["target_name"], identifier, field["sas_id_target"]
     )
 
     pixel_scale = resolution / 4
@@ -1238,7 +1238,7 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB, resolution: float = 6.0):
         not os.path.isfile(
             os.path.join(
                 logsdir,
-                f"log_VLBI_facet_imaging_{resolution}_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_facet_imaging_{resolution}_{field['target_name']}_{field['sas_id_target']}.txt",
             )
         )
     ):
@@ -1251,12 +1251,12 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB, resolution: float = 6.0):
             # Extract the previous working directory
             flocs_workdir = ""
             print(
-                f"Scanning log_VLBI_facet_imaging_{resolution}_{field['field_name']}_{field['target_sas_id']}.txt for workdir."
+                f"Scanning log_VLBI_facet_imaging_{resolution}_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
             )
             with open(
                 os.path.join(
                     logsdir,
-                    f"log_VLBI_facet_imaging_{resolution}_{field['field_name']}_{field['target_sas_id']}.txt",
+                    f"log_VLBI_facet_imaging_{resolution}_{field['target_name']}_{field['sas_id_target']}.txt",
                 )
             ) as f_out:
                 for line in f_out.readlines():
@@ -1277,14 +1277,14 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB, resolution: float = 6.0):
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_facet_imaging_{resolution}_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_facet_imaging_{resolution}_{field['target_name']}_{field['sas_id_target']}.txt",
             ),
             "w+",
         ) as f_out,
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_facet_imaging_{resolution}_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                f"log_VLBI_facet_imaging_{resolution}_{field['target_name']}_{field['sas_id_target']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -1298,31 +1298,31 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB, resolution: float = 6.0):
                 success = True
         if success:
             db.set_status_finished(
-                field["field_name"],
+                field["target_name"],
                 identifier,
-                field["target_sas_id"],
+                field["sas_id_target"],
             )
         else:
             db.set_status_failed(
-                field["field_name"],
+                field["target_name"],
                 identifier,
-                field["target_sas_id"],
+                field["sas_id_target"],
             )
             raise RuntimeError
 
 
 def run_prepare_ddf_subtract(field, db: FlocsDB):
     print(
-        f"Preparing input for DDF subtract of {field['field_name']} {field['target_sas_id']}"
+        f"Preparing input for DDF subtract of {field['target_name']} {field['sas_id_target']}"
     )
-    db.set_status_processing(field["field_name"], "prepare_ddf_subtract", field["target_sas_id"])
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    db.set_status_processing(field["target_name"], "prepare_ddf_subtract", field["sas_id_target"])
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
-    target_path = get_most_recent_run(outdir, field["target_sas_id"], "VLBI_delay")
+    target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay")
     target_ms_path = target_path / "results_VLBI_delay-calibration"
     mses_unaveraged = list(target_ms_path.glob("*.dp3concat"))
     delay_sols = ""
@@ -1335,16 +1335,16 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
         delaydir = f"[{sourcedir[0]},{sourcedir[1]}]"
         print(f"Using PILOT delay calibration solutions: {delay_sols}")
 
-        linc_path = get_most_recent_run(outdir, field["target_sas_id"], "LINC_target")
+        linc_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
         print(f"Using LINC MSes at {linc_path}")
         linc_ms_path = linc_path / "results_LINC_target" / "results"
         mses_unaveraged = list(linc_ms_path.glob("*.dp3concat"))
     mses_unaveraged_pilot = list(target_ms_path.glob("*.dp3concat"))
     if not mses_unaveraged:
         db.set_status_failed(
-            field["field_name"],
+            field["target_name"],
             "prepare_ddf_subtract",
-            field["target_sas_id"],
+            field["sas_id_target"],
         )
         raise RuntimeError(
             f"No unaveraged input MSes found at {linc_ms_path}/*.dp3concat"
@@ -1352,7 +1352,7 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
     if mses_unaveraged_pilot and (len(mses_unaveraged_pilot) == len(mses_unaveraged)):
         print("Appropriate input exists for ddf-pipeline.")
         db.set_status_finished(
-            field["field_name"], "prepare_ddf_subtract", field["target_sas_id"],
+            field["target_name"], "prepare_ddf_subtract", field["sas_id_target"],
         )
         return mses_unaveraged_pilot
 
@@ -1406,21 +1406,21 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
 
     mses_delay_corrected = list(target_ms_path.glob("*.dp3concat"))
     db.set_status_finished(
-        field["field_name"], "prepare_ddf_subtract", field["target_sas_id"],
+        field["target_name"], "prepare_ddf_subtract", field["sas_id_target"],
     )
     return mses_delay_corrected
 
 
 def run_prepare_ddf(field, db: FlocsDB):
-    print(f"Preparing DDF input for {field['field_name']} {field['target_sas_id']}")
-    db.set_status_processing(field["field_name"], "prepare_ddf", field["target_sas_id"])
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    print(f"Preparing DDF input for {field['target_name']} {field['sas_id_target']}")
+    db.set_status_processing(field["target_name"], "prepare_ddf", field["sas_id_target"])
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
-    target_path = get_most_recent_run(outdir, field["target_sas_id"], "VLBI_delay")
+    target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay")
     target_ms_path = target_path / "results_VLBI_delay-calibration"
     mses_unaveraged = list(target_ms_path.glob("*.dp3concat"))
     delay_sols = ""
@@ -1433,7 +1433,7 @@ def run_prepare_ddf(field, db: FlocsDB):
         delaydir = f"[{sourcedir[0]},{sourcedir[1]}]"
         print(f"Using PILOT delay calibration solutions: {delay_sols}")
 
-        linc_path = get_most_recent_run(outdir, field["target_sas_id"], "LINC_target")
+        linc_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
         print(f"Using LINC MSes at {linc_path}")
         linc_ms_path = linc_path / "results_LINC_target" / "results"
         mses_unaveraged = list(linc_ms_path.glob("*.dp3concat"))
@@ -1442,9 +1442,9 @@ def run_prepare_ddf(field, db: FlocsDB):
     mses_averaged = [target_ms_path / f"{ms.stem}_pre-cal.ms" for ms in mses_unaveraged]
     if not mses_unaveraged:
         db.set_status_failed(
-            field["field_name"],
+            field["target_name"],
             "prepare_ddf",
-            field["target_sas_id"],
+            field["sas_id_target"],
         )
         raise RuntimeError(
             f"No unaveraged input MSes found at {linc_ms_path}/*.dp3concat"
@@ -1509,36 +1509,36 @@ def run_prepare_ddf(field, db: FlocsDB):
         time.sleep(30)
 
     db.set_status_finished(
-        field["field_name"], "prepare_ddf", field["target_sas_id"],
+        field["target_name"], "prepare_ddf", field["sas_id_target"],
     )
     return mses_averaged
 
 
 def run_pilot_process_ddf_toil(field, db: FlocsDB):
-    print(f"Running ddf subtract for {field['field_name']} {field['target_sas_id']}")
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    print(f"Running ddf subtract for {field['target_name']} {field['sas_id_target']}")
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(
-        outdir, field["target_sas_id"], "VLBI_delay-calibration"
+        outdir, field["sas_id_target"], "VLBI_delay-calibration"
     )
     target_ms_path = target_path / "results_VLBI_delay-calibration"
     print(f"Using data at: {target_path}/*.dp3concat")
 
-    ddf_path = get_most_recent_run(outdir, field["target_sas_id"], "DDF-pipeline")
+    ddf_path = get_most_recent_run(outdir, field["sas_id_target"], "DDF-pipeline")
     ddf_sols_path = ddf_path / "SOLSDIR"
     print(f"Using DDF run at: {ddf_path}")
 
-    db.set_status_processing(field["field_name"], "vlbi_ddf_subtract", field["target_sas_id"])
+    db.set_status_processing(field["target_name"], "vlbi_ddf_subtract", field["sas_id_target"])
     context = get_current_context()
     if context["ti"].try_number == 1 or (
         not os.path.isfile(
             os.path.join(
                 logsdir,
-                f"log_VLBI_process-ddf_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt",
             )
         )
     ):
@@ -1547,19 +1547,19 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
         # Extract the previous working directory
         flocs_workdir = ""
         print(
-            f"Scanning log_VLBI_process-ddf_{field['field_name']}_{field['target_sas_id']}.txt for workdir."
+            f"Scanning log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt for workdir."
         )
         with (
             open(
                 os.path.join(
                     logsdir,
-                    f"log_VLBI_process-ddf_{field['field_name']}_{field['target_sas_id']}.txt",
+                    f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt",
                 )
             ) as f_out,
             open(
                 os.path.join(
                     logsdir,
-                    f"log_VLBI_process-ddf_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                    f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}_err.txt",
                 )
             ) as f_err,
         ):
@@ -1581,14 +1581,14 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_process-ddf_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}.txt",
             ),
             "w+",
         ) as f_out,
         open(
             os.path.join(
                 logsdir,
-                f"log_VLBI_process-ddf_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                f"log_VLBI_process-ddf_{field['target_name']}_{field['sas_id_target']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -1602,46 +1602,46 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
                 success = True
         if success:
             db.set_status_finished(
-                field["field_name"], "vlbi_ddf_subtract", field["target_sas_id"],
+                field["target_name"], "vlbi_ddf_subtract", field["sas_id_target"],
             )
         else:
             db.set_status_failed(
-                field["field_name"], "vlbi_ddf_subtract", field["target_sas_id"]
+                field["target_name"], "vlbi_ddf_subtract", field["sas_id_target"]
             )
             raise RuntimeError
 
 
 def launch_ddf_pipeline(field, db: FlocsDB):
-    print(f"Starting ddf-pipeline for {field['field_name']} {field['target_sas_id']}")
-    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["field_name"])
+    print(f"Starting ddf-pipeline for {field['target_name']} {field['sas_id_target']}")
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
     target_path = get_most_recent_run(
-        outdir, field["target_sas_id"], "VLBI_delay-calibration"
+        outdir, field["sas_id_target"], "VLBI_delay-calibration"
     )
     target_ms_path = target_path / "results_VLBI_delay-calibration"
     if not list(target_ms_path.glob("*pre-cal.ms")):
-        target_path = get_most_recent_run(outdir, field["target_sas_id"], "LINC_target")
+        target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
         target_ms_path = target_path / "results_LINC_target" / "results"
 
     cmd = f"flocs-run ddf-pipeline --scheduler slurm --slurm-time 72:00:00 --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} --config-file {DDF_CONFIG} {target_ms_path}"
     print(cmd)
-    db.set_status_processing(field["field_name"], "ddf", field["target_sas_id"])
+    db.set_status_processing(field["target_name"], "ddf", field["sas_id_target"])
     with (
         open(
             os.path.join(
                 logsdir,
-                f"log_DDF-pipeline_{field['field_name']}_{field['target_sas_id']}.txt",
+                f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}.txt",
             ),
             "w+",
         ) as f_out,
         open(
             os.path.join(
                 logsdir,
-                f"log_DDF-pipeline_{field['field_name']}_{field['target_sas_id']}_err.txt",
+                f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}_err.txt",
             ),
             "w+",
         ) as f_err,
@@ -1654,7 +1654,7 @@ def launch_ddf_pipeline(field, db: FlocsDB):
                 if "Submitted batch job" in line:
                     jobid = line.strip().split()[-1]
         else:
-            db.set_status_failed(field["field_name"], "ddf", field["target_sas_id"])
+            db.set_status_failed(field["target_name"], "ddf", field["sas_id_target"])
             raise RuntimeError("Failed to submit job.")
 
         if not jobid:
@@ -1670,9 +1670,9 @@ def launch_ddf_pipeline(field, db: FlocsDB):
                     time.sleep(60)
                 elif status == "COMPLETED":
                     db.set_status_finished(
-                        field["field_name"],
+                        field["target_name"],
                         "ddf",
-                        field["target_sas_id"],
+                        field["sas_id_target"],
                     )
                     break
                 elif (
@@ -1680,7 +1680,7 @@ def launch_ddf_pipeline(field, db: FlocsDB):
                     or ("TIMEOUT" in status)
                     or ("CANCELLED" in status)
                 ):
-                    db.set_status_failed(field["field_name"], "ddf", field["target_sas_id"])
+                    db.set_status_failed(field["target_name"], "ddf", field["sas_id_target"])
                     raise RuntimeError(
-                        f"DDF-pipeline for {field['field_name']} {field['target_sas_id']} failed."
+                        f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
                     )

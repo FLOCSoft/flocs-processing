@@ -45,16 +45,16 @@ def ilotss_dispatcher():
     def launch_field(field):
         date = datetime.now().isoformat()
         run_id = (
-            f"ilotss__{field['field_name'].replace(' ', '_')}"
-            f"__{field['target_sas_id']}"
+            f"ilotss__{field['target_name'].replace(' ', '_')}"
+            f"__{field['sas_id_target']}"
             f"__{date}"
         )
         raise DagRunTriggerException(
             trigger_dag_id="ilotss",
             dag_run_id=run_id,
             conf={
-                "field_name": field["field_name"],
-                "target_sas_id": field["target_sas_id"],
+                "target_name": field["target_name"],
+                "sas_id_target": field["sas_id_target"],
             },
             logical_date=None,
             reset_dag_run=False,

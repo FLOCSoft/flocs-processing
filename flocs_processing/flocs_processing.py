@@ -87,6 +87,16 @@ CALIBRATOR_COLUMNS = {
 }
 
 
+COLUMN_RENAMES = {
+    "field_name": "target_name",
+    "target_sas_id": "sas_id_target",
+    "calibrator1_sas_id": "sas_id_calibrator1",
+    "calibrator2_sas_id": "sas_id_calibrator2",
+    "selected_calibrator_sas_id": "sas_id_calibrator_final",
+    "processing_status": "status",
+}
+
+
 def _status_columns() -> dict[str, str]:
     facets = ", ".join(STEP_COLUMNS[step] for step in FACET_STEPS)
     # The summary can only become finished once all five imaging jobs are finished.
@@ -113,8 +123,8 @@ def _create_table(db: sqlite3.Connection, table: str, pipelines: str):
         f"{name} {definition}" for name, definition in (CALIBRATOR_COLUMNS | _status_columns()).items()
     )
     db.execute(f"""CREATE TABLE {table} (
-        field_name TEXT NOT NULL,
-        target_sas_id TEXT PRIMARY KEY NOT NULL,
+        target_name TEXT NOT NULL,
+        sas_id_target TEXT PRIMARY KEY NOT NULL,
         project_code TEXT,
         observation_date TEXT,
         ra_deg REAL,
@@ -127,14 +137,14 @@ def _create_table(db: sqlite3.Connection, table: str, pipelines: str):
         time_resolution_s REAL,
         nr_international INTEGER,
         elevation_mean_deg REAL,
-        calibrator1_sas_id TEXT,
-        calibrator2_sas_id TEXT,
-        selected_calibrator_sas_id TEXT,
+        sas_id_calibrator1 TEXT,
+        sas_id_calibrator2 TEXT,
+        sas_id_calibrator_final TEXT,
         selected_delay_calibrator TEXT,
         pipelines TEXT NOT NULL DEFAULT '{pipelines}',
         priority INTEGER NOT NULL DEFAULT 0,
         processing_step TEXT NOT NULL DEFAULT 'pending',
-        processing_status TEXT NOT NULL DEFAULT 'queued',
+        status TEXT NOT NULL DEFAULT 'queued',
         processing_start_time TEXT,
         processing_end_time TEXT,
         processing_cluster TEXT,
@@ -176,7 +186,7 @@ def _import_step_files(db: sqlite3.Connection, table: str, dbname: str, new_stat
         raise ValueError(f"Expected a directory at {steps}.")
     valid_statuses = {state.value for state in PIPELINE_STATUS}
     for row in db.execute(f"SELECT * FROM {table}").fetchall():
-        target = row["target_sas_id"]
+        target = row["sas_id_target"]
         component = quote(str(target), safe="").replace(".", "%2E") or "%EMPTY"
         directory = steps / component
         # The previous CLI could queue, start a download or manually finish a field
@@ -197,7 +207,7 @@ def _import_step_files(db: sqlite3.Connection, table: str, dbname: str, new_stat
                 raise ValueError(f"Invalid pipeline status in {path}: {status!r}.")
             if column not in new_statuses and status != row[column]:
                 raise ValueError(f"Conflicting SQLite and file statuses for {path}.")
-            db.execute(f"UPDATE {table} SET {column}=? WHERE target_sas_id=?", (status, target))
+            db.execute(f"UPDATE {table} SET {column}=? WHERE sas_id_target=?", (status, target))
 
 
 def _copy_legacy_fields(db: sqlite3.Connection, table: str, legacy_table: str, legacy_pipeline: Optional[str]):
@@ -218,14 +228,14 @@ def _copy_legacy_fields(db: sqlite3.Connection, table: str, legacy_table: str, l
         if not pipeline:
             raise ValueError(f"Target {target} has ambiguous pipelines {old['pipelines']!r}. Specify --legacy-pipeline.")
         values = {
-            "field_name": old["target_name"],
-            "target_sas_id": target,
-            "calibrator1_sas_id": old.get("sas_id_calibrator1"),
-            "calibrator2_sas_id": old.get("sas_id_calibrator2"),
-            "selected_calibrator_sas_id": old.get("sas_id_calibrator_final"),
+            "target_name": old["target_name"],
+            "sas_id_target": target,
+            "sas_id_calibrator1": old.get("sas_id_calibrator1"),
+            "sas_id_calibrator2": old.get("sas_id_calibrator2"),
+            "sas_id_calibrator_final": old.get("sas_id_calibrator_final"),
             "priority": old["priority"] or 0,
             "pipelines": pipeline,
-            "processing_status": statuses[old["status"]],
+            "status": statuses[old["status"]],
         }
         if old["downloaded"] or old["status"] == "downloaded":
             values["status_download"] = PIPELINE_STATUS.finished.value
@@ -244,7 +254,7 @@ def _copy_legacy_fields(db: sqlite3.Connection, table: str, legacy_table: str, l
             values["processing_step"] = active[0] if len(active) == 1 else "unknown"
             stage_statuses = {values.get(column) for column in STEP_COLUMNS.values()}
             if old["status"] == "processing" and 3 in stage_statuses and 98 not in stage_statuses:
-                values["processing_status"] = "awaiting_approval"
+                values["status"] = "awaiting_approval"
         columns = ", ".join(values)
         placeholders = ", ".join("?" for _ in values)
         db.execute(f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", list(values.values()))
@@ -259,24 +269,31 @@ def migrate_database(
         Parameter(help="Route for master-branch rows whose pipelines do not specify a unique route."),
     ] = None,
 ):
-    """Import previous step statuses and add columns for final calibration scores."""
+    """Restore main-branch column names and import previous step statuses."""
     table = _quote_table(table_name)
     with sqlite3.connect(Path(dbname).resolve().as_uri() + "?mode=rw", uri=True) as db:
         db.row_factory = sqlite3.Row
         db.execute("BEGIN IMMEDIATE")
         existing = {row["name"] for row in db.execute(f"PRAGMA table_xinfo({table})")}
-        if "sas_id_target" in existing and "target_name" in existing:
+        if "processing_step" in existing and "workflow_run_id" in existing:
+            for old, new in COLUMN_RENAMES.items():
+                if old in existing:
+                    if new in existing:
+                        raise ValueError(f"Conflicting database columns {old} and {new}.")
+                    db.execute(f'ALTER TABLE {table} RENAME COLUMN "{old}" TO "{new}"')
+                    existing.remove(old)
+                    existing.add(new)
+            for name, definition in (CALIBRATOR_COLUMNS | _status_columns()).items():
+                if name not in existing:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+            _import_step_files(db, table, dbname, set(STEP_COLUMNS.values()) - existing)
+        elif "sas_id_target" in existing and "target_name" in existing:
             # Keep the original table, including data the new schema cannot represent,
             # such as a shared facet status with no per-resolution completion records.
             legacy_table = _quote_table(table_name + "_legacy")
             db.execute(f"ALTER TABLE {table} RENAME TO {legacy_table}")
             _create_table(db, table, legacy_pipeline or "vlbi-widefield")
             _copy_legacy_fields(db, table, legacy_table, legacy_pipeline)
-        elif "target_sas_id" in existing and "processing_status" in existing:
-            for name, definition in (CALIBRATOR_COLUMNS | _status_columns()).items():
-                if name not in existing:
-                    db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
-            _import_step_files(db, table, dbname, set(STEP_COLUMNS.values()) - existing)
         else:
             raise ValueError(f"Unrecognised processing schema for {table_name} in {dbname}.")
 
@@ -303,12 +320,12 @@ def add_field(
         Parameter(help="Pipeline this field needs to be processed with."),
     ] = None,
 ):
-    dbstr = f"insert into {table_name} (field_name"
+    dbstr = f"insert into {table_name} (target_name"
     if len(sas_id_calibrators) == 1:
-        dbstr += ", calibrator1_sas_id"
+        dbstr += ", sas_id_calibrator1"
     if len(sas_id_calibrators) == 2:
-        dbstr += ", calibrator1_sas_id, calibrator2_sas_id"
-    dbstr += ", target_sas_id"
+        dbstr += ", sas_id_calibrator1, sas_id_calibrator2"
+    dbstr += ", sas_id_target"
     if pipelines:
         dbstr += ", pipelines"
     dbstr += f") values ('{field_name}', "

@@ -88,7 +88,7 @@ class FlocsDB:
     def _update(self, name, target, values, run_id=None):
         owner = run_id if run_id is not None else self._run_id()
         values = dict(values, last_updated_at=self._now())
-        where = "field_name=? AND target_sas_id=?"
+        where = "target_name=? AND sas_id_target=?"
         parameters = list(values.values()) + [name, str(target)]
         if owner is not None:
             where += " AND workflow_run_id=?"
@@ -108,17 +108,17 @@ class FlocsDB:
             raise ValueError(f"Unknown processing mode: {intent}")
         where, parameters = [], []
         if obsid:
-            where.append("target_sas_id=?")
+            where.append("sas_id_target=?")
             parameters.append(str(obsid))
         else:
-            where.append("processing_status='queued'")
+            where.append("status='queued'")
         if intent != "%":
             where.append("pipelines=?")
             parameters.append(modes[intent])
         with sqlite3.connect(self.DATABASE) as db:
             db.row_factory = sqlite3.Row
             return db.execute(
-                f"SELECT * FROM {self._table} WHERE {' AND '.join(where)} ORDER BY priority DESC, target_sas_id",
+                f"SELECT * FROM {self._table} WHERE {' AND '.join(where)} ORDER BY priority DESC, sas_id_target",
                 parameters,
             ).fetchall()
 
@@ -136,26 +136,26 @@ class FlocsDB:
             db.row_factory = sqlite3.Row
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                f"SELECT * FROM {self._table} WHERE field_name=? AND target_sas_id=? AND pipelines=?",
+                f"SELECT * FROM {self._table} WHERE target_name=? AND sas_id_target=? AND pipelines=?",
                 (name, str(target), pipeline),
             ).fetchone()
             if row is None:
                 return None
             if row["workflow_run_id"] == run_id:
-                if row["processing_status"] in {"failed", "finished"}:
+                if row["status"] in {"failed", "finished"}:
                     db.execute(
-                        f"UPDATE {self._table} SET processing_status=?, "
+                        f"UPDATE {self._table} SET status=?, "
                         "processing_end_time=NULL, last_error=NULL, last_updated_at=? "
-                        "WHERE target_sas_id=? AND workflow_run_id=?",
+                        "WHERE sas_id_target=? AND workflow_run_id=?",
                         (self._progress_status(row), self._now(), str(target), run_id),
                     )
                     row = db.execute(
-                        f"SELECT * FROM {self._table} WHERE target_sas_id=?", (str(target),)
+                        f"SELECT * FROM {self._table} WHERE sas_id_target=?", (str(target),)
                     ).fetchone()
                 return dict(row)
-            if row["processing_status"] not in {"queued", "failed"}:
+            if row["status"] not in {"queued", "failed"}:
                 return None
-            values = dict(workflow_run_id=run_id, processing_status=self._progress_status(row),
+            values = dict(workflow_run_id=run_id, status=self._progress_status(row),
                           processing_start_time=self._now(), processing_end_time=None,
                           processing_cluster=cluster, processing_user=user, processing_host=host,
                           last_updated_at=self._now(), last_error=None)
@@ -165,16 +165,16 @@ class FlocsDB:
                     values[key] = str(value)
             db.execute(
                 f"UPDATE {self._table} SET " + ", ".join(f"{key}=?" for key in values)
-                + " WHERE field_name=? AND target_sas_id=?",
+                + " WHERE target_name=? AND sas_id_target=?",
                 list(values.values()) + [name, str(target)],
             )
             return dict(db.execute(
-                f"SELECT * FROM {self._table} WHERE target_sas_id=?", (str(target),)
+                f"SELECT * FROM {self._table} WHERE sas_id_target=?", (str(target),)
             ).fetchone())
 
     def get_step_status(self, name, identifier, target):
         rows = self.get_db_columns(str(target))
-        if not rows or rows[0]["field_name"] != name:
+        if not rows or rows[0]["target_name"] != name:
             raise LookupError(f"Field {name}, target {target} is not registered.")
         if identifier == "vlbi_facet_imaging":
             return rows[0]["status_vlbi_facet_imaging"]
@@ -196,11 +196,11 @@ class FlocsDB:
             db.row_factory = sqlite3.Row
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                f"SELECT * FROM {self._table} WHERE field_name=? AND target_sas_id=?", (name, str(target))
+                f"SELECT * FROM {self._table} WHERE target_name=? AND sas_id_target=?", (name, str(target))
             ).fetchone()
             if row is None or (owner is not None and row["workflow_run_id"] != owner):
                 raise LookupError(f"Field {name}, target {target} is missing or belongs to another workflow.")
-            retrying = (row["processing_status"] == "failed" and status == PIPELINE_STATUS.processing.value
+            retrying = (row["status"] == "failed" and status == PIPELINE_STATUS.processing.value
                         and any(row[column] == PIPELINE_STATUS.error.value for column in columns))
             values = dict.fromkeys(columns, status)
             values["last_updated_at"] = self._now()
@@ -212,35 +212,35 @@ class FlocsDB:
                 if status == PIPELINE_STATUS.error.value:
                     values["last_error"] = f"{identifier} failed."
             starting = (status in {PIPELINE_STATUS.processing.value, PIPELINE_STATUS.await_approval.value}
-                        and row["processing_status"] not in {"failed", "finished"})
-            if row["processing_status"] in {"running", "awaiting_approval"} or starting or retrying:
-                values["processing_status"] = self._progress_status(dict(row) | values)
+                        and row["status"] not in {"failed", "finished"})
+            if row["status"] in {"running", "awaiting_approval"} or starting or retrying:
+                values["status"] = self._progress_status(dict(row) | values)
             if status == PIPELINE_STATUS.processing.value and (starting or retrying):
                 values["last_error"] = None
                 if retrying:
                     values["processing_end_time"] = None
             db.execute(
                 f"UPDATE {self._table} SET " + ", ".join(f"{key}=?" for key in values)
-                + " WHERE field_name=? AND target_sas_id=?",
+                + " WHERE target_name=? AND sas_id_target=?",
                 list(values.values()) + [name, str(target)],
             )
 
     def reset_field(self, name, target):
-        self._update(name, target, {"processing_step": "pending", "processing_status": "queued",
+        self._update(name, target, {"processing_step": "pending", "status": "queued",
                                    "workflow_run_id": None, "processing_end_time": None, "last_error": None})
 
     def set_field_downloading(self, name, target):
         self.set_status_processing(name, "download", target)
 
     def set_field_processing(self, name, target):
-        self._update(name, target, {"processing_status": "running"})
+        self._update(name, target, {"status": "running"})
 
     def set_field_finished(self, name, target, run_id=None):
-        self._update(name, target, {"processing_step": "finished", "processing_status": "finished",
+        self._update(name, target, {"processing_step": "finished", "status": "finished",
                                    "processing_end_time": self._now(), "last_error": None}, run_id)
 
     def set_field_failed(self, name, target, error=None, run_id=None):
-        self._update(name, target, {"processing_status": "failed", "processing_end_time": self._now(),
+        self._update(name, target, {"status": "failed", "processing_end_time": self._now(),
                                    "last_error": str(error) if error is not None else "Workflow failed."}, run_id)
 
     def set_status_nothing(self, name, identifier, target):
@@ -273,18 +273,18 @@ class FlocsDB:
         if str(old_sas_id) == str(new_sas_id):
             return
         owner = self._run_id()
-        where = "target_sas_id=?"
+        where = "sas_id_target=?"
         parameters = [str(new_sas_id), str(old_sas_id)]
         if owner is not None:
             where += " AND workflow_run_id=?"
             parameters.append(owner)
         with sqlite3.connect(self.DATABASE) as db:
-            cursor = db.execute(f"UPDATE {self._table} SET target_sas_id=? WHERE {where}", parameters)
+            cursor = db.execute(f"UPDATE {self._table} SET sas_id_target=? WHERE {where}", parameters)
             if cursor.rowcount != 1:
                 raise LookupError(f"Target {old_sas_id} is missing or belongs to another workflow.")
 
     def set_final_calibrator(self, name, target, final_cal):
-        self._update(name, target, {"selected_calibrator_sas_id": str(final_cal), "last_error": None})
+        self._update(name, target, {"sas_id_calibrator_final": str(final_cal), "last_error": None})
 
     def set_delay_calibrator(self, name, target, source, phase_score=None, amp_score=None):
         self._update(name, target, {
