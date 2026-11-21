@@ -1,5 +1,6 @@
 from enum import Enum
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
+from flocs_processing.flocs_processing import set_target_surls
 from flocs_processing.pipeline_runners import (
     check_target_subbands,
     get_most_recent_run,
@@ -306,7 +307,7 @@ def ilotss():
 
             if stage_calibrators or stage_target:
                 print(f"Field {field['sas_id_target']} is not downloaded.")
-                stager = ObservationStager(get_surls=True)
+                stager = ObservationStager(get_surls=False)
                 stager.find_observation_by_sasid(
                     "ALL",
                     field["sas_id_target"],
@@ -314,6 +315,7 @@ def ilotss():
                     minfreq,
                     maxfreq,
                 )
+                set_target_surls(stager, field, minfreq, maxfreq)
                 expected = field["number_subbands"]
                 if expected is not None and len(stager.target_uris) != expected:
                     raise AirflowFailException(

@@ -1,5 +1,6 @@
 from enum import Enum
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
+from flocs_processing.flocs_processing import get_target_products, set_target_surls, parse_target_coordinates
 from flocs_processing.pipeline_runners import (
     check_target_subbands,
     get_most_recent_run,
@@ -23,12 +24,11 @@ import oracledb
 import os
 import pathlib
 import random
-import re
 import subprocess
 import time
 from contextlib import redirect_stdout
 
-from astropy.coordinates import Angle, SkyCoord
+from astropy.coordinates import Angle
 from airflow.exceptions import AirflowFailException
 from airflow.sdk import dag, task, get_current_context
 from airflow.providers.standard.sensors.python import PythonSensor
@@ -84,26 +84,6 @@ NEEDS_MANUAL_APPROVAL_DELAY = parser.getboolean(
 TARGET_COORDINATE_MATCH_RADIUS_DEG = parser.getfloat(
     "DEFAULT", "TARGET_COORDINATE_MATCH_RADIUS_DEG", fallback=1.3
 )
-_COORDINATE_TARGET_RE = re.compile(
-    r"^(?:ILT)?J(?P<rah>\d{2})(?P<ram>\d{2})(?P<ras>\d{2}(?:\.\d+)?)"
-    r"(?P<sign>[+-])(?P<decd>\d{2})(?P<decm>\d{2})"
-    r"(?P<decs>\d{2}(?:\.\d+)?)$",
-    re.IGNORECASE,
-)
-
-
-def parse_target_coordinates(target_name):
-    """Parse compact IAU target names into an Astropy SkyCoord."""
-    match = _COORDINATE_TARGET_RE.fullmatch(
-        (target_name or "").strip().replace(" ", "")
-    )
-    if not match:
-        return None
-    ra = f"{match['rah']}h{match['ram']}m{match['ras']}s"
-    dec = f"{match['sign']}{match['decd']}d{match['decm']}m" f"{match['decs']}s"
-    return SkyCoord(f"{ra} {dec}", frame="icrs")
-
-
 def parse_position_search_output(output):
     """Extract SAS ID, SAPI, and angular distance from flocs-lta output."""
     matches = []
@@ -236,9 +216,12 @@ def pilot_single_target():
         if minfreq >= maxfreq:
             raise AirflowFailException("freq_min_mhz must be less than freq_max_mhz.")
         if CURRENT_DB.is_step_finished(field["target_name"], "download", field["sas_id_target"]):
-            obsids = list(
-                (pathlib.Path(field["input_location"]) / "target").glob("L*")
-            )
+            obsids = [
+                path for path in (pathlib.Path(field["input_location"]) / "target").glob("L*")
+                if any(path.glob("*.MS"))
+            ]
+            if not obsids:
+                raise AirflowFailException("No downloaded target MeasurementSets found.")
             if len(obsids) > 1:
                 raise NotImplementedError(
                     "Cannot process multi-epoch data with this DAG (yet)."
@@ -358,12 +341,20 @@ def pilot_single_target():
 
             if stage_calibrators or stage_target:
                 print(f"Field {field['sas_id_target']} is not downloaded.")
-                stager = ObservationStager(get_surls=True)
+                stager = ObservationStager(get_surls=False)
                 try:
                     target_coordinates = parse_target_coordinates(
                         field.get("target_name") or ""
                     )
                     if target_coordinates is not None:
+                        stager.find_observation_by_sasid(
+                            "ALL", database_target_sasid, None, minfreq, maxfreq
+                        )
+                        source_sasid = str(stager.obsid)
+                        pointing, _ = get_target_products(
+                            stager, field["target_name"], database_target_sasid, minfreq, maxfreq
+                        )
+                        source_sapid = str(pointing.subArrayPointingIdentifier)
                         print(
                             f"Searching for target coordinates "
                             f"({target_coordinates.ra.deg:.7f}, "
@@ -397,9 +388,11 @@ def pilot_single_target():
                         exact_sasid_matches = [
                             match
                             for match in position_matches
-                            if match[0] == database_target_sasid
+                            if match[0] == source_sasid and match[1] == source_sapid
                         ]
-                        candidate_matches = exact_sasid_matches or position_matches
+                        if not exact_sasid_matches:
+                            raise ValueError("Position search did not match the registered observation.")
+                        candidate_matches = exact_sasid_matches
                         selected_sasid, selected_sapid, separation_deg = min(
                             candidate_matches, key=lambda match: match[2]
                         )
@@ -433,19 +426,6 @@ def pilot_single_target():
                             minfreq,
                             maxfreq,
                         )
-                        if stager.sapid is None:
-                            usable_saps = [
-                                sap
-                                for sap in stager.target.subArrayPointings
-                                if sap.numberOfCorrelatedDataProducts > 1
-                            ]
-                            if len(usable_saps) > 1:
-                                raise ValueError(
-                                    f"Target name {field['target_name']!r} is not a "
-                                    "coordinate, and observation "
-                                    f"{field['sas_id_target']} has {len(usable_saps)} "
-                                    "usable SAPs. Provide coordinates to select a beam."
-                                )
                 except SystemExit as err:
                     raise AirflowFailException(
                         "flocs-lta could not resolve a unique observation for "
@@ -456,6 +436,7 @@ def pilot_single_target():
                         f"Could not select a target beam for "
                         f"{field['target_name']} ({field['sas_id_target']}): {err}"
                     ) from err
+                set_target_surls(stager, field, minfreq, maxfreq)
                 expected = field["number_subbands"]
                 if expected is not None and len(stager.target_uris) != expected:
                     raise AirflowFailException(
@@ -554,7 +535,14 @@ def pilot_single_target():
                                 cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                             )
                             if not proc.returncode:
-                                actual_sasid = str(stager.obsid)
+                                obsids = [
+                                    path for path in pathlib.Path(dl_path).glob("L*")
+                                    if any(path.glob("*.MS"))
+                                ]
+                                if len(obsids) != 1:
+                                    raise RuntimeError("Expected one downloaded target observation directory.")
+                                actual_sasid = obsids[0].name[1:]
+                                check_target_subbands(dict(field, sas_id_target=actual_sasid))
                                 CURRENT_DB.update_target_sas_id(
                                     database_target_sasid, actual_sasid
                                 )

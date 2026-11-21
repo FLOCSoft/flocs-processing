@@ -16,6 +16,8 @@ The expected naming directory structure for input data is `<data folder>/<field 
 ## Database setup
 A database for processing is created via `flocs-processing create-database`. This will create an empty database with the observation metadata, processing statuses and calibrator scores. The `--pipelines` option selects `vlbi-widefield` (the default) or `vlbi-single-target`. Datasets to process can be added via `flocs-processing add-field` or existing fields manipulated via `flocs-processing update-field-status` or `flocs-processing update-pipeline-status`.
 
+By default, `add-field` reads observation metadata from the LTA. The `--freq-min-mhz` and `--freq-max-mhz` options set the target frequency range, and `--number-subbands` selects that many subbands starting at the lowest frequency in the range. The selected count and frequency limits are stored for the DAG to use. Use `--no-fetch-metadata` to register local data with explicit selection values.
+
 ## Processing data
 ### Automatic setup via flocs
 To start processing data, Airflow needs to be running. This can be setup automatically via `flocs-processing deploy-airflow`. See its help for options.
