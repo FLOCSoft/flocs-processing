@@ -110,6 +110,8 @@ class FlocsDB:
             parameters.append(str(obsid))
         else:
             where.append("status='queued'")
+            where.extend(f"COALESCE({column}, 0)<>?" for column in STEP_COLUMNS.values())
+            parameters.extend([PIPELINE_STATUS.processing.value] * len(STEP_COLUMNS))
         if intent != "%":
             where.append("pipelines=?")
             parameters.append(intent)
@@ -152,6 +154,8 @@ class FlocsDB:
                     ).fetchone()
                 return dict(row)
             if row["status"] not in {"queued", "failed"}:
+                return None
+            if any(row[column] == PIPELINE_STATUS.processing.value for column in STEP_COLUMNS.values()):
                 return None
             values = dict(workflow_run_id=run_id, status=self._progress_status(row),
                           processing_start_time=self._now(), processing_end_time=None,
