@@ -7,7 +7,6 @@ from airflow.sdk import dag, task
 from airflow.sdk.exceptions import AirflowSkipException
 
 from flocs_processing.db_utils import FlocsDB
-from flocs_processing.flocs_processing import FIELD_STATUS, PIPELINE_STATUS
 
 
 if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
@@ -33,20 +32,12 @@ CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
 def ilotss_dispatcher():
     @task.short_circuit
     def check_fields():
-        return bool(CURRENT_DB.get_db_columns(intent="widefield"))
+        return bool(CURRENT_DB.get_db_columns(intent="PILOT-widefield"))
 
     @task
     def get_unprocessed_field():
-        for dbrow in CURRENT_DB.get_db_columns(intent="widefield"):
+        for dbrow in CURRENT_DB.get_db_columns(intent="PILOT-widefield"):
             field = dict(dbrow)
-            if field["status"] == FIELD_STATUS.downloading.value:
-                continue
-            if any(
-                value == PIPELINE_STATUS.processing.value
-                for key, value in field.items()
-                if key.startswith("status_")
-            ):
-                continue
             return field
         raise AirflowSkipException("No unprocessed fields found.")
 

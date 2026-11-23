@@ -1,11 +1,13 @@
 #!/usr/bin/env python
-from .db_utils import FlocsDB
+from .db_utils import FACET_STEPS, FlocsDB
 from .processors import FlocsAirflowProcessor
 from cyclopts import Parameter
 from enum import Enum
 import cyclopts
 import functools
-import subprocess
+import math
+import re
+import sqlite3
 import structlog
 from typing import Annotated, Literal, Optional, get_args
 
@@ -14,18 +16,128 @@ app = cyclopts.App()
 logger = structlog.getLogger()
 
 
+def parse_target_coordinates(target_name):
+    """Parse compact IAU target names into an Astropy SkyCoord."""
+    match = re.fullmatch(
+        r"(?:ILT)?J(?P<rah>\d{2})(?P<ram>\d{2})(?P<ras>\d{2}(?:\.\d+)?)"
+        r"(?P<sign>[+-])(?P<decd>\d{2})(?P<decm>\d{2})(?P<decs>\d{2}(?:\.\d+)?)",
+        (target_name or "").strip().replace(" ", ""),
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    from astropy.coordinates import SkyCoord
+
+    ra = f"{match['rah']}h{match['ram']}m{match['ras']}s"
+    dec = f"{match['sign']}{match['decd']}d{match['decm']}m{match['decs']}s"
+    return SkyCoord(f"{ra} {dec}", frame="icrs")
+
+
+def get_target_products(lookup, target_name, sas_id_target, minfreq, maxfreq):
+    """Resolve the target beam and its valid archive products within the band."""
+    from awlofar.main.aweimports import AveragingPipeline, CorrelatedDataProduct
+
+    pointings = list(lookup.target.subArrayPointings)
+    if str(lookup.obsid) != str(sas_id_target):
+        pipelines = list(
+            (AveragingPipeline.observationId == sas_id_target)
+            & (AveragingPipeline.isValid == 1)
+        )
+        if len(pipelines) != 1:
+            raise ValueError(f"Cannot identify a unique averaging pipeline for {sas_id_target}.")
+        sapids = {source.subArrayPointingIdentifier for source in pipelines[0].sourceData}
+        pointings = [sap for sap in pointings if sap.subArrayPointingIdentifier in sapids]
+    if lookup.sapid is not None:
+        pointings = [
+            sap for sap in pointings
+            if str(sap.subArrayPointingIdentifier) == str(lookup.sapid)
+        ]
+    else:
+        named = [sap for sap in pointings if sap.targetName == target_name]
+        if named:
+            pointings = named
+        elif len(pointings) > 1:
+            target = parse_target_coordinates(target_name)
+            if target is not None:
+                from astropy.coordinates import SkyCoord
+
+                pointings = [sap for sap in pointings if sap.pointing is not None]
+                if pointings:
+                    pointing = min(
+                        pointings,
+                        key=lambda sap: target.separation(SkyCoord(
+                            sap.pointing.rightAscension, sap.pointing.declination, unit="deg"
+                        )).deg,
+                    )
+                    pointings = [pointing]
+    if len(pointings) != 1:
+        raise ValueError(f"Cannot identify a unique pointing for {target_name}, target {sas_id_target}.")
+    pointing = pointings[0]
+    query = CorrelatedDataProduct.isValid == 1
+    query &= (
+        CorrelatedDataProduct.subArrayPointing.subArrayPointingIdentifier
+        == pointing.subArrayPointingIdentifier
+    )
+    if str(lookup.obsid) != str(sas_id_target):
+        query &= CorrelatedDataProduct.pipeline.observationId == sas_id_target
+    else:
+        query &= CorrelatedDataProduct.observation.observationId == lookup.obsid
+    query &= CorrelatedDataProduct.minimumFrequency >= minfreq
+    query &= CorrelatedDataProduct.maximumFrequency <= maxfreq
+    return pointing, list(query)
+
+
+def set_target_surls(lookup, field, minfreq, maxfreq):
+    """Use the registered target selection for archive staging."""
+    from awlofar.main.aweimports import FileObject
+
+    pointing, products = get_target_products(
+        lookup, field["target_name"], field["sas_id_target"], minfreq, maxfreq
+    )
+    uris = set()
+    for product in products:
+        file = ((FileObject.data_object == product) & (FileObject.isValid > 0)).max("creation_date")
+        if file is None or not file.URI:
+            raise ValueError(f"No valid archive file for target {field['sas_id_target']}, subband {product.subband}.")
+        uris.add(file.URI)
+    if not uris or len(uris) != len(products):
+        raise ValueError(f"Cannot identify one archive file per subband for target {field['sas_id_target']}.")
+    lookup.sapid = str(pointing.subArrayPointingIdentifier)
+    lookup.target_uris = uris
+    lookup.get_surls = True
+    lookup.srm_prefix = f"srms_{field['sas_id_target']}"
+    with open(f"{lookup.srm_prefix}.txt", "w") as stream:
+        stream.write("".join(uri + "\n" for uri in sorted(uris)))
+
+
 PIPELINES = Literal[
     "all",
+    "download",
     "calibrator1",
     "calibrator2",
     "target",
     "vlbi_delay",
+    "prepare_ddf",
     "ddf",
+    "prepare_ddf_subtract",
     "vlbi_ddf_subtract",
     "vlbi_dd",
     "vlbi_intermediate_img",
     "vlbi_facet_subtract",
     "vlbi_facet_imaging",
+    "vlbi_facet_imaging_6.0",
+    "vlbi_facet_imaging_3.0",
+    "vlbi_facet_imaging_1.5",
+    "vlbi_facet_imaging_0.6",
+    "vlbi_facet_imaging_0.3",
+]
+
+INTENT_PIPELINES = {
+    "PILOT-widefield": ["linc", "ddf-pipeline", "vlbi-delay-widefield"],
+    "PILOT-single-target": ["linc", "vlbi-delay-single-target"],
+}
+COMPONENT_PIPELINES = Literal[
+    "linc", "ddf-pipeline", "vlbi-delay-widefield", "vlbi-delay-single-target"
 ]
 
 
@@ -73,36 +185,73 @@ def create_database(
     table_name: Annotated[
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
-    pipelines: Annotated[list[str], Parameter(help="", consume_multiple=True)] = [
-        "linc"
-    ],
+    pipelines: Annotated[
+        Optional[list[str]],
+        Parameter(help="Component pipelines to record for these observations.", consume_multiple=True),
+    ] = None,
+    intent: Annotated[
+        Literal["PILOT-widefield", "PILOT-single-target"],
+        Parameter(help="Workflow this database will process."),
+    ] = "PILOT-widefield",
 ):
+    if intent not in INTENT_PIPELINES:
+        raise ValueError(f"Unknown processing intent: {intent}")
+    if pipelines is None:
+        pipelines = INTENT_PIPELINES[intent]
+    if not pipelines or any(pipeline not in get_args(COMPONENT_PIPELINES) for pipeline in pipelines):
+        raise ValueError("Provide valid component pipeline names.")
     pipeline_str = ",".join(pipelines)
-    pipelines = list(map(str.lower, pipelines))
-    dbstr = f"create table {table_name}(target_name text default NULL, pipelines text default '{pipeline_str}', priority int default 0, status text default '{FIELD_STATUS.nothing.value}', downloaded bit default 0"
-
-    if "linc" in pipelines:
-        dbstr += f", sas_id_calibrator1 text default NULL, sas_id_calibrator2 text default NULL, sas_id_calibrator_final text default NULL, sas_id_target text primary key default NULL, status_calibrator1 smallint default {PIPELINE_STATUS.nothing.value}, status_calibrator2 smallint default {PIPELINE_STATUS.nothing.value}, status_target smallint default {PIPELINE_STATUS.nothing.value}"
-    if "ddf-pipeline" in pipelines:
-        dbstr += f", status_ddf smallint default {PIPELINE_STATUS.nothing.value}"
-    if "vlbi-delay-widefield" in pipelines:
-        dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_ddf_subtract smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_intermediate_img smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_facet_subtract smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_facet_imaging smallint default {PIPELINE_STATUS.nothing.value}"
-    if "vlbi-delay-single-target" in pipelines:
-        dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
-    dbstr += ");"
-
-    cmd = ["sqlite3", dbname, dbstr]
-    print(f"Creating table via: {' '.join(cmd)}")
-
-    return_code = subprocess.run(cmd)
-    if not return_code:
-        raise RuntimeError(f"Failed to create table {table_name} in database {dbname}.")
+    table = '"' + table_name.replace('"', '""') + '"'
+    dbstr = f"""CREATE TABLE {table} (
+        target_name TEXT NOT NULL,
+        sas_id_target TEXT PRIMARY KEY NOT NULL,
+        project_code TEXT,
+        observation_date TEXT,
+        pointing_ra_deg REAL,
+        pointing_dec_deg REAL,
+        integration_hours REAL,
+        number_subbands_requested INTEGER,
+        number_subbands_downloaded INTEGER,
+        freq_min_mhz REAL,
+        freq_max_mhz REAL,
+        frequency_resolution_hz REAL,
+        time_resolution_s REAL,
+        nr_core INTEGER,
+        nr_remote INTEGER,
+        nr_international INTEGER,
+        elevation_mean_deg REAL,
+        sas_id_calibrator1 TEXT,
+        sas_id_calibrator2 TEXT,
+        sas_id_calibrator_final TEXT,
+        selected_delay_calibrator TEXT,
+        intent TEXT NOT NULL DEFAULT '{intent}',
+        pipelines TEXT NOT NULL DEFAULT '{pipeline_str}',
+        priority INTEGER NOT NULL DEFAULT 0,
+        processing_step TEXT NOT NULL DEFAULT 'pending',
+        status TEXT NOT NULL DEFAULT 'queued',
+        processing_start_time TEXT,
+        processing_end_time TEXT,
+        processing_cluster TEXT,
+        processing_user TEXT,
+        processing_host TEXT,
+        workflow_run_id TEXT,
+        last_updated_at TEXT,
+        input_location TEXT,
+        work_directory TEXT,
+        output_location TEXT,
+        last_error TEXT,
+        delay_calibrator_phase_score REAL,
+        delay_calibrator_amp_score REAL,
+        n_dd_calibrators INTEGER,
+        dd_calibrator_phase_score_min REAL,
+        dd_calibrator_phase_score_max REAL,
+        dd_calibrator_phase_score_median REAL,
+        dd_calibrator_amp_score_min REAL,
+        dd_calibrator_amp_score_max REAL,
+        dd_calibrator_amp_score_median REAL
+    )"""
+    with sqlite3.connect(dbname) as db:
+        db.execute(dbstr)
 
 
 @app.command()
@@ -123,27 +272,96 @@ def add_field(
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
     pipelines: Annotated[
-        str, Parameter(help="Pipelines this field needs to be processed with.")
-    ] = "",
+        Optional[list[str]],
+        Parameter(help="Component pipelines to record for this field.", consume_multiple=True),
+    ] = None,
+    intent: Annotated[
+        Optional[Literal["PILOT-widefield", "PILOT-single-target"]],
+        Parameter(help="Workflow this field needs to be processed with."),
+    ] = None,
+    freq_min_mhz: Annotated[
+        Optional[float], Parameter(help="Minimum target frequency in MHz (120 by default).")
+    ] = None,
+    freq_max_mhz: Annotated[
+        Optional[float], Parameter(help="Maximum target frequency in MHz (168 by default).")
+    ] = None,
+    fetch_metadata: Annotated[
+        bool, Parameter(help="Read observation metadata from the LTA.")
+    ] = True,
 ):
-    dbstr = f"insert into {table_name} (target_name"
-    if len(sas_id_calibrators) == 1:
-        dbstr += ", sas_id_calibrator1"
-    if len(sas_id_calibrators) == 2:
-        dbstr += ", sas_id_calibrator1, sas_id_calibrator2"
-    dbstr += f", sas_id_target) values ('{field_name}', "
-    if len(sas_id_calibrators) == 1:
-        dbstr += f"'{sas_id_calibrators[0]}', "
-    if len(sas_id_calibrators) == 2:
-        dbstr += f"'{sas_id_calibrators[0]}', '{sas_id_calibrators[1]}', "
-    dbstr += f"'{sas_id_target}')"
+    minfreq = 120 if freq_min_mhz is None else freq_min_mhz
+    maxfreq = 168 if freq_max_mhz is None else freq_max_mhz
+    if not (math.isfinite(minfreq) and math.isfinite(maxfreq) and 0 < minfreq < maxfreq):
+        raise ValueError("Target frequency limits must be finite, positive and increasing.")
+    if len(sas_id_calibrators) not in (1, 2):
+        raise ValueError("Provide one or two calibrator SAS IDs.")
+    values = dict(target_name=field_name, sas_id_target=sas_id_target)
+    values.update(zip(("sas_id_calibrator1", "sas_id_calibrator2"), sas_id_calibrators))
+    if intent is not None:
+        if intent not in INTENT_PIPELINES:
+            raise ValueError(f"Unknown processing intent: {intent}")
+        values.update(intent=intent, pipelines=",".join(INTENT_PIPELINES[intent]))
+    if pipelines is not None:
+        if not pipelines or any(pipeline not in get_args(COMPONENT_PIPELINES) for pipeline in pipelines):
+            raise ValueError("Provide valid component pipeline names.")
+        values["pipelines"] = ",".join(pipelines)
+    if fetch_metadata:
+        from flocs_lta.lta_search import ObservationStager
 
-    cmd = ["sqlite3", dbname, dbstr]
-    print(f"Adding field {field_name} to {table_name} via: {' '.join(cmd)}")
-
-    return_code = subprocess.run(cmd)
-    if not return_code:
-        raise RuntimeError(f"Failed to update table {table_name} in database {dbname}.")
+        lookup = ObservationStager(get_surls=False)
+        try:
+            lookup.find_observation_by_sasid("ALL", sas_id_target)
+        except SystemExit as error:
+            raise RuntimeError(f"No LTA metadata found for target {sas_id_target}.") from error
+        observation = lookup.target
+        pointing, products = get_target_products(lookup, field_name, sas_id_target, minfreq, maxfreq)
+        if not products:
+            raise ValueError(f"No valid correlated data products in the requested frequency range for {sas_id_target}.")
+        known_subbands = [
+            product.subband for product in products
+            if product.subband is not None and product.subband >= 0
+        ]
+        if len(set(known_subbands)) != len(known_subbands):
+            raise ValueError("The target selection must contain one data product per subband.")
+        frequencies = [(product.minimumFrequency, product.maximumFrequency) for product in products]
+        valid_frequencies = all(
+            low is not None and high is not None and 0 < low < high < float("inf")
+            for low, high in frequencies
+        )
+        widths = {product.channelWidth for product in products}
+        intervals = {product.integrationInterval for product in products}
+        if not valid_frequencies:
+            raise ValueError("The target selection has invalid archive frequency limits.")
+        date = observation.startTime
+        duration = observation.duration
+        core_stations = observation.nrStationsCore
+        remote_stations = observation.nrStationsRemote
+        international_stations = observation.nrStationsInternational
+        width = next(iter(widths)) if len(widths) == 1 else None
+        interval = next(iter(intervals)) if len(intervals) == 1 else None
+        values.update(
+            project_code=str(lookup.project) if lookup.project is not None else None,
+            observation_date=date.isoformat() if date and date.year > 1990 else None,
+            integration_hours=duration / 3600 if duration is not None and 0 < duration < float("inf") else None,
+            pointing_ra_deg=pointing.pointing.rightAscension if pointing.pointing else None,
+            pointing_dec_deg=pointing.pointing.declination if pointing.pointing else None,
+            nr_core=core_stations if core_stations is not None and core_stations >= 0 else None,
+            nr_remote=remote_stations if remote_stations is not None and remote_stations >= 0 else None,
+            nr_international=international_stations if international_stations is not None and international_stations >= 0 else None,
+            number_subbands_requested=len(products),
+            freq_min_mhz=minfreq,
+            freq_max_mhz=maxfreq,
+            frequency_resolution_hz=width if width is not None and 0 < width < float("inf") else None,
+            time_resolution_s=interval if interval is not None and 0 < interval < float("inf") else None,
+        )
+    else:
+        values.update(freq_min_mhz=freq_min_mhz, freq_max_mhz=freq_max_mhz)
+    columns = ", ".join(values)
+    placeholders = ", ".join("?" for _ in values)
+    print(f"Adding field {field_name} to {table_name} in {dbname}")
+    with sqlite3.connect(dbname) as database:
+        table = '"' + table_name.replace('"', '""') + '"'
+        database.execute(f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", list(values.values()))
 
 
 @app.command()
@@ -203,34 +421,22 @@ def update_pipeline_status(
 ):
     db = FlocsDB(dbname=dbname, db_table=table_name)
     if pipeline == "all":
-        p_list = list(get_args(PIPELINES))
-        p_list.remove("all")
-        for p in p_list:
-            logger.info(f"Setting pipeline {p} to status {set_status}")
-            match set_status:
-                case "nothing":
-                    db.set_status_nothing(field_name, p, sas_id_target)
-                case "downloaded":
-                    db.set_status_downloaded(field_name, p, sas_id_target)
-                case "processing":
-                    db.set_status_processing(field_name, p, sas_id_target)
-                case "failed":
-                    db.set_status_failed(field_name, p, sas_id_target)
-                case "success":
-                    db.set_status_finished(field_name, p, sas_id_target)
+        p_list = [p for p in get_args(PIPELINES) if p != "all" and p not in FACET_STEPS]
     else:
-        logger.info(f"Setting pipeline {pipeline} to status {set_status}")
+        p_list = [pipeline]
+    for p in p_list:
+        logger.info(f"Setting pipeline {p} to status {set_status}")
         match set_status:
             case "nothing":
-                db.set_status_nothing(field_name, pipeline, sas_id_target)
+                db.set_status_nothing(field_name, p, sas_id_target)
             case "downloaded":
-                db.set_status_downloaded(field_name, pipeline, sas_id_target)
+                db.set_status_downloaded(field_name, p, sas_id_target)
             case "processing":
-                db.set_status_processing(field_name, pipeline, sas_id_target)
+                db.set_status_processing(field_name, p, sas_id_target)
             case "failed":
-                db.set_status_failed(field_name, pipeline, sas_id_target)
+                db.set_status_failed(field_name, p, sas_id_target)
             case "success":
-                db.set_status_finished(field_name, pipeline, sas_id_target)
+                db.set_status_finished(field_name, p, sas_id_target)
 
 
 @app.command()

@@ -14,9 +14,19 @@ Flocs-processing requires three folders to be setup:
 The expected naming directory structure for input data is `<data folder>/<field name>/{calibrator,target}`. Inside the calibrator and target folders, the observations should follow the usual `LXXXXXX` naming scheme. These **must** match the SAS IDs in the database for flocs to be able to find them.
 
 ## Database setup
-A database for processing is created via `flocs-processing create-database`. This will create an empty database with the necessary columns. Datasets to process can be added via `flocs-processing add-field` or existing fields manipulated via `flocs-processing update-field-status` or `flocs-processing update-pipeline-status`.
+A database for processing is created via `flocs-processing create-database`. This will create an empty database with the observation metadata, processing statuses and calibrator scores. The `--intent` option selects `PILOT-widefield` (the default) or `PILOT-single-target`. The `pipelines` column lists the component pipelines: `linc,ddf-pipeline,vlbi-delay-widefield` for widefield processing, or `linc,vlbi-delay-single-target` for single-target processing. These can be set with `--pipelines`. Datasets to process can be added via `flocs-processing add-field` or existing fields manipulated via `flocs-processing update-field-status` or `flocs-processing update-pipeline-status`.
+
+By default, `add-field` reads observation metadata from the LTA, including the pointing coordinates in `pointing_ra_deg` and `pointing_dec_deg`, and station counts in `nr_core`, `nr_remote` and `nr_international`. The `--freq-min-mhz` and `--freq-max-mhz` options set the target frequency range (120–168 MHz by default). `add-field` stores these limits and counts the matching LTA subbands in `number_subbands_requested`. The DAG uses the same limits for the target LTA request and checks its size against that count. Use `--no-fetch-metadata` to register local data with optional frequency limits. Fields inherit the database defaults for intent and component pipelines unless these are set with `add-field`.
+
+The DAG accepts a target download when at least 95% of the requested subbands are present and verified. It records `number_subbands_downloaded` in the database and the accepted MeasurementSet names in `download.json`. Retries and LINC check the local inputs against that list. For local inputs without a staging request, the full registered count is required when one was specified.
+
+Each step records its status in a JSON file under `<dbname>.steps/<table>/<target SAS ID>/`, for example `vlbi_delay.json`. A missing file means the step has no recorded status. Keep the `<dbname>.steps` directory with the database when copying it. Use `update-pipeline-status` to change or clear a step status.
+
+The step JSON also records profiling for the latest attempt. The elapsed time runs from the start of processing to the recorded outcome and includes any time waiting for Slurm. For delay calibration it stops when approval is requested. When Slurm accounting is available, `profiling.slurm_jobs` records the CPU seconds and peak resident memory in bytes for each job, along with its ID, state, elapsed seconds and allocated CPUs.
 
 ## Processing data
+Widefield DD calibration uses `--skip-unreliable-sources`. Use a version of `flocs-runners` that accepts this option and a PILOT workflow that supports the corresponding `skip_unreliable_sources` input.
+
 ### Automatic setup via flocs
 To start processing data, Airflow needs to be running. This can be setup automatically via `flocs-processing deploy-airflow`. See its help for options.
 
