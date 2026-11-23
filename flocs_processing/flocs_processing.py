@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from .db_utils import FACET_STEPS, STEP_COLUMNS, FlocsDB
+from .db_utils import FACET_STEPS, FlocsDB
 from .processors import FlocsAirflowProcessor
 from cyclopts import Parameter
 from enum import Enum
@@ -202,10 +202,6 @@ def create_database(
         raise ValueError("Provide valid component pipeline names.")
     pipeline_str = ",".join(pipelines)
     table = '"' + table_name.replace('"', '""') + '"'
-    status_columns = ", ".join(
-        f"{column} SMALLINT NOT NULL DEFAULT 0" for column in STEP_COLUMNS.values()
-    )
-    facets = ", ".join(STEP_COLUMNS[step] for step in FACET_STEPS)
     dbstr = f"""CREATE TABLE {table} (
         target_name TEXT NOT NULL,
         sas_id_target TEXT PRIMARY KEY NOT NULL,
@@ -251,15 +247,7 @@ def create_database(
         dd_calibrator_phase_score_median REAL,
         dd_calibrator_amp_score_min REAL,
         dd_calibrator_amp_score_max REAL,
-        dd_calibrator_amp_score_median REAL,
-        {status_columns},
-        downloaded INTEGER GENERATED ALWAYS AS (status_download IN (2, 3)) VIRTUAL,
-        status_vlbi_facet_imaging SMALLINT GENERATED ALWAYS AS (
-            CASE WHEN 99 IN ({facets}) THEN 99
-                 WHEN 98 IN ({facets}) THEN 98
-                 WHEN 3 IN ({facets}) THEN 3
-                 WHEN min({facets}) = max({facets}) THEN min({facets})
-                 ELSE 98 END) VIRTUAL
+        dd_calibrator_amp_score_median REAL
     )"""
     with sqlite3.connect(dbname) as db:
         db.execute(dbstr)

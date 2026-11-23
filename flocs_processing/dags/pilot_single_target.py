@@ -142,7 +142,9 @@ class STAGING_STATUS(Enum):
 
 def get_approval(field, identifier, needs_approval):
     field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-    if not needs_approval or field[f"status_{identifier}"] == PIPELINE_STATUS.finished.value:
+    if not needs_approval or CURRENT_DB.get_step_status(
+        field["target_name"], identifier, field["sas_id_target"]
+    ) == PIPELINE_STATUS.finished.value:
         return field
 
 
@@ -157,7 +159,7 @@ def field_failed(context):
 
 
 def step_finished(field, identifier):
-    status = field[f"status_{identifier}"]
+    status = CURRENT_DB.get_step_status(field["target_name"], identifier, field["sas_id_target"])
     if status in (PIPELINE_STATUS.finished.value, PIPELINE_STATUS.await_approval.value):
         return True
     if status == PIPELINE_STATUS.processing.value:
@@ -603,10 +605,14 @@ def pilot_single_target():
     def select_best_calibrator(field, result1, result2):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
         result1 = field if (
-            field["sas_id_calibrator1"] and field["status_calibrator1"] == PIPELINE_STATUS.finished.value
+            field["sas_id_calibrator1"] and CURRENT_DB.get_step_status(
+                field["target_name"], "calibrator1", field["sas_id_target"]
+            ) == PIPELINE_STATUS.finished.value
         ) else None
         result2 = field if (
-            field["sas_id_calibrator2"] and field["status_calibrator2"] == PIPELINE_STATUS.finished.value
+            field["sas_id_calibrator2"] and CURRENT_DB.get_step_status(
+                field["target_name"], "calibrator2", field["sas_id_target"]
+            ) == PIPELINE_STATUS.finished.value
         ) else None
         selected = field["sas_id_calibrator_final"]
         if (result1 and selected == field["sas_id_calibrator1"]) or (
@@ -744,7 +750,9 @@ def pilot_single_target():
     @task
     def finish_field(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        if field["status_vlbi_dd"] != PIPELINE_STATUS.finished.value:
+        if CURRENT_DB.get_step_status(
+            field["target_name"], "vlbi_dd", field["sas_id_target"]
+        ) != PIPELINE_STATUS.finished.value:
             raise AirflowFailException("DD calibration has not finished.")
         context = get_current_context()
         CURRENT_DB.set_field_finished(

@@ -18,6 +18,8 @@ A database for processing is created via `flocs-processing create-database`. Thi
 
 By default, `add-field` reads observation metadata from the LTA, including the pointing coordinates in `pointing_ra_deg` and `pointing_dec_deg`, and station counts in `nr_core`, `nr_remote` and `nr_international`. The `--freq-min-mhz` and `--freq-max-mhz` options set the target frequency range, and `--number-subbands` selects that many subbands starting at the lowest frequency in the range. The selected count and frequency limits are stored for the DAG to use. Use `--no-fetch-metadata` to register local data with explicit selection values. Fields inherit the database defaults for intent and component pipelines unless these are set with `add-field`.
 
+Each step records its status in a JSON file under `<dbname>.steps/<table>/<target SAS ID>/`, for example `vlbi_delay.json`. A missing file means the step has no recorded status. Keep the `<dbname>.steps` directory with the database when copying it. Use `update-pipeline-status` to change or clear a step status.
+
 ## Processing data
 ### Automatic setup via flocs
 To start processing data, Airflow needs to be running. This can be setup automatically via `flocs-processing deploy-airflow`. See its help for options.

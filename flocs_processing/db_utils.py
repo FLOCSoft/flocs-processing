@@ -1,7 +1,12 @@
 from enum import Enum
 import functools
+import json
+from pathlib import Path
+import shutil
 import sqlite3
 from datetime import datetime, timezone
+from urllib.parse import quote
+from uuid import uuid4
 
 
 class FIELD_STATUS(Enum):
@@ -43,14 +48,11 @@ class PIPELINE_STATUS(Enum):
 FACET_STEPS = tuple(
     f"vlbi_facet_imaging_{resolution}" for resolution in ("6.0", "3.0", "1.5", "0.6", "0.3")
 )
-STEP_COLUMNS = {
-    step: "status_" + step.replace(".", "p")
-    for step in (
-        "download", "calibrator1", "calibrator2", "target", "vlbi_delay", "prepare_ddf",
-        "ddf", "prepare_ddf_subtract", "vlbi_ddf_subtract", "vlbi_dd", "vlbi_intermediate_img",
-        "vlbi_facet_subtract", *FACET_STEPS,
-    )
-}
+STEPS = (
+    "download", "calibrator1", "calibrator2", "target", "vlbi_delay", "prepare_ddf",
+    "ddf", "prepare_ddf_subtract", "vlbi_ddf_subtract", "vlbi_dd", "vlbi_intermediate_img",
+    "vlbi_facet_subtract", *FACET_STEPS,
+)
 
 
 class FlocsDB:
@@ -58,6 +60,8 @@ class FlocsDB:
         self.DATABASE = dbname
         self.TABLE_NAME = db_table
         self._table = '"' + db_table.replace('"', '""') + '"'
+        database_path = Path(dbname).expanduser().resolve()
+        self._steps = database_path.with_name(database_path.name + ".steps") / self._path_component(db_table)
 
     @staticmethod
     def _now():
@@ -79,9 +83,48 @@ class FlocsDB:
         return f"{run.dag_id}:{run.run_id}"
 
     @staticmethod
-    def _progress_status(row):
-        statuses = {row[column] for column in STEP_COLUMNS.values()}
-        if PIPELINE_STATUS.await_approval.value in statuses and PIPELINE_STATUS.processing.value not in statuses:
+    def _path_component(value):
+        return quote(str(value), safe="").replace(".", "%2E") or "%EMPTY"
+
+    def _step_directory(self, target):
+        return self._steps / self._path_component(target)
+
+    @staticmethod
+    def _read_step(path):
+        try:
+            return json.loads(path.read_text())["status"]
+        except FileNotFoundError:
+            return PIPELINE_STATUS.nothing.value
+
+    def _read_steps(self, target):
+        directory = self._step_directory(target)
+        try:
+            paths = list(directory.iterdir())
+        except FileNotFoundError:
+            return {}
+        return {
+            path.stem: self._read_step(path)
+            for path in paths
+            if path.suffix == ".json" and path.stem in STEPS
+        }
+
+    @staticmethod
+    def _write_step(path, status, run_id):
+        if status == PIPELINE_STATUS.nothing.value:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
+        try:
+            temporary.write_text(json.dumps({"status": status, "run_id": run_id}) + "\n")
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _progress_status(steps):
+        if (PIPELINE_STATUS.await_approval.value in steps.values()
+                and PIPELINE_STATUS.processing.value not in steps.values()):
             return "awaiting_approval"
         return "running"
 
@@ -110,17 +153,21 @@ class FlocsDB:
             parameters.append(str(obsid))
         else:
             where.append("status='queued'")
-            where.extend(f"COALESCE({column}, 0)<>?" for column in STEP_COLUMNS.values())
-            parameters.extend([PIPELINE_STATUS.processing.value] * len(STEP_COLUMNS))
         if intent != "%":
             where.append("intent=?")
             parameters.append(intent)
         with sqlite3.connect(self.DATABASE) as db:
             db.row_factory = sqlite3.Row
-            return db.execute(
+            rows = db.execute(
                 f"SELECT * FROM {self._table} WHERE {' AND '.join(where)} ORDER BY priority DESC, sas_id_target",
                 parameters,
             ).fetchall()
+        if obsid:
+            return rows
+        return [
+            row for row in rows
+            if PIPELINE_STATUS.processing.value not in self._read_steps(row["sas_id_target"]).values()
+        ]
 
     def get_run_field(self, run_id):
         with sqlite3.connect(self.DATABASE) as db:
@@ -141,13 +188,14 @@ class FlocsDB:
             ).fetchone()
             if row is None:
                 return None
+            steps = self._read_steps(target)
             if row["workflow_run_id"] == run_id:
                 if row["status"] in {"failed", "finished"}:
                     db.execute(
                         f"UPDATE {self._table} SET status=?, "
                         "processing_end_time=NULL, last_error=NULL, last_updated_at=? "
                         "WHERE sas_id_target=? AND workflow_run_id=?",
-                        (self._progress_status(row), self._now(), str(target), run_id),
+                        (self._progress_status(steps), self._now(), str(target), run_id),
                     )
                     row = db.execute(
                         f"SELECT * FROM {self._table} WHERE sas_id_target=?", (str(target),)
@@ -155,9 +203,9 @@ class FlocsDB:
                 return dict(row)
             if row["status"] not in {"queued", "failed"}:
                 return None
-            if any(row[column] == PIPELINE_STATUS.processing.value for column in STEP_COLUMNS.values()):
+            if PIPELINE_STATUS.processing.value in steps.values():
                 return None
-            values = dict(workflow_run_id=run_id, status=self._progress_status(row),
+            values = dict(workflow_run_id=run_id, status=self._progress_status(steps),
                           processing_start_time=self._now(), processing_end_time=None,
                           processing_cluster=cluster, processing_user=user, processing_host=host,
                           last_updated_at=self._now(), last_error=None)
@@ -178,9 +226,16 @@ class FlocsDB:
         rows = self.get_db_columns(str(target))
         if not rows or rows[0]["target_name"] != name:
             raise LookupError(f"Field {name}, target {target} is not registered.")
+        directory = self._step_directory(target)
         if identifier == "vlbi_facet_imaging":
-            return rows[0]["status_vlbi_facet_imaging"]
-        return rows[0][STEP_COLUMNS[identifier]]
+            statuses = {self._read_step(directory / f"{step}.json") for step in FACET_STEPS}
+            for status in (PIPELINE_STATUS.error, PIPELINE_STATUS.processing, PIPELINE_STATUS.await_approval):
+                if status.value in statuses:
+                    return status.value
+            return statuses.pop() if len(statuses) == 1 else PIPELINE_STATUS.processing.value
+        if identifier not in STEPS:
+            raise ValueError(f"Unknown processing step: {identifier}")
+        return self._read_step(directory / f"{identifier}.json")
 
     def is_step_finished(self, name, identifier, target):
         return self.get_step_status(name, identifier, target) in {
@@ -193,7 +248,8 @@ class FlocsDB:
     def _set_step(self, name, identifier, target, status):
         owner = self._run_id()
         steps = FACET_STEPS if identifier == "vlbi_facet_imaging" else (identifier,)
-        columns = [STEP_COLUMNS[step] for step in steps]
+        if identifier != "vlbi_facet_imaging" and identifier not in STEPS:
+            raise ValueError(f"Unknown processing step: {identifier}")
         with sqlite3.connect(self.DATABASE) as db:
             db.row_factory = sqlite3.Row
             db.execute("BEGIN IMMEDIATE")
@@ -202,10 +258,11 @@ class FlocsDB:
             ).fetchone()
             if row is None or (owner is not None and row["workflow_run_id"] != owner):
                 raise LookupError(f"Field {name}, target {target} is missing or belongs to another workflow.")
+            statuses = self._read_steps(target)
             retrying = (row["status"] == "failed" and status == PIPELINE_STATUS.processing.value
-                        and any(row[column] == PIPELINE_STATUS.error.value for column in columns))
-            values = dict.fromkeys(columns, status)
-            values["last_updated_at"] = self._now()
+                        and any(statuses.get(step) == PIPELINE_STATUS.error.value for step in steps))
+            statuses.update(dict.fromkeys(steps, status))
+            values = {"last_updated_at": self._now()}
             if status != PIPELINE_STATUS.nothing.value:
                 phase = "calibrators" if identifier in {"calibrator1", "calibrator2"} else identifier
                 if identifier in FACET_STEPS:
@@ -216,7 +273,7 @@ class FlocsDB:
             starting = (status in {PIPELINE_STATUS.processing.value, PIPELINE_STATUS.await_approval.value}
                         and row["status"] not in {"failed", "finished"})
             if row["status"] in {"running", "awaiting_approval"} or starting or retrying:
-                values["status"] = self._progress_status(dict(row) | values)
+                values["status"] = self._progress_status(statuses)
             if status == PIPELINE_STATUS.processing.value and (starting or retrying):
                 values["last_error"] = None
                 if retrying:
@@ -226,6 +283,9 @@ class FlocsDB:
                 + " WHERE target_name=? AND sas_id_target=?",
                 list(values.values()) + [name, str(target)],
             )
+            directory = self._step_directory(target)
+            for step in steps:
+                self._write_step(directory / f"{step}.json", status, owner or row["workflow_run_id"])
 
     def reset_field(self, name, target):
         self._update(name, target, {"processing_step": "pending", "status": "queued",
@@ -277,10 +337,27 @@ class FlocsDB:
         if owner is not None:
             where += " AND workflow_run_id=?"
             parameters.append(owner)
-        with sqlite3.connect(self.DATABASE) as db:
-            cursor = db.execute(f"UPDATE {self._table} SET sas_id_target=? WHERE {where}", parameters)
-            if cursor.rowcount != 1:
-                raise LookupError(f"Target {old_sas_id} is missing or belongs to another workflow.")
+        old_directory = self._step_directory(old_sas_id)
+        new_directory = self._step_directory(new_sas_id)
+        copied = False
+        try:
+            with sqlite3.connect(self.DATABASE) as db:
+                db.execute("BEGIN IMMEDIATE")
+                if new_directory.exists():
+                    raise FileExistsError(f"Step statuses already exist for target {new_sas_id}.")
+                cursor = db.execute(f"UPDATE {self._table} SET sas_id_target=? WHERE {where}", parameters)
+                if cursor.rowcount != 1:
+                    raise LookupError(f"Target {old_sas_id} is missing or belongs to another workflow.")
+                if old_directory.exists():
+                    # Keep the old status files until the database change commits.
+                    copied = True
+                    shutil.copytree(old_directory, new_directory)
+        except Exception:
+            if copied and new_directory.exists():
+                shutil.rmtree(new_directory)
+            raise
+        if copied:
+            shutil.rmtree(old_directory)
 
     def set_final_calibrator(self, name, target, final_cal):
         self._update(name, target, {"sas_id_calibrator_final": str(final_cal), "last_error": None})
