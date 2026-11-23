@@ -285,9 +285,6 @@ def add_field(
     freq_max_mhz: Annotated[
         Optional[float], Parameter(help="Maximum target frequency in MHz (168 by default).")
     ] = None,
-    number_subbands: Annotated[
-        Optional[int], Parameter(help="Select this many lowest-frequency target subbands within the frequency range.")
-    ] = None,
     fetch_metadata: Annotated[
         bool, Parameter(help="Read observation metadata from the LTA.")
     ] = True,
@@ -296,8 +293,6 @@ def add_field(
     maxfreq = 168 if freq_max_mhz is None else freq_max_mhz
     if not (math.isfinite(minfreq) and math.isfinite(maxfreq) and 0 < minfreq < maxfreq):
         raise ValueError("Target frequency limits must be finite, positive and increasing.")
-    if number_subbands is not None and number_subbands <= 0:
-        raise ValueError("number_subbands must be positive.")
     if len(sas_id_calibrators) not in (1, 2):
         raise ValueError("Provide one or two calibrator SAS IDs.")
     values = dict(target_name=field_name, sas_id_target=sas_id_target)
@@ -322,18 +317,6 @@ def add_field(
         pointing, products = get_target_products(lookup, field_name, sas_id_target, minfreq, maxfreq)
         if not products:
             raise ValueError(f"No valid correlated data products in the requested frequency range for {sas_id_target}.")
-        products.sort(key=lambda product: product.minimumFrequency)
-        candidates = products
-        available = list(dict.fromkeys(product.subband for product in products))
-        if number_subbands is not None:
-            if len(available) < number_subbands:
-                raise ValueError(f"Requested {number_subbands} subbands, found {len(available)} in the frequency range.")
-            selected_bands = available[:number_subbands]
-            if None in selected_bands or min(selected_bands) < 0:
-                raise ValueError("Cannot select subbands whose archive identifiers are unknown.")
-            selected = set(selected_bands)
-            products = [product for product in products if product.subband in selected]
-        subbands = {product.subband for product in products}
         known_subbands = [
             product.subband for product in products
             if product.subband is not None and product.subband >= 0
@@ -349,14 +332,6 @@ def add_field(
         intervals = {product.integrationInterval for product in products}
         if not valid_frequencies:
             raise ValueError("The target selection has invalid archive frequency limits.")
-        selected_min = min(low for low, high in frequencies)
-        selected_max = max(high for low, high in frequencies)
-        replay = [
-            product for product in candidates
-            if product.minimumFrequency >= selected_min and product.maximumFrequency <= selected_max
-        ]
-        if {product.subband for product in replay} != subbands or len(replay) != len(products):
-            raise ValueError("The selected subbands cannot be represented by a single frequency range.")
         date = observation.startTime
         duration = observation.duration
         core_stations = observation.nrStationsCore
@@ -374,14 +349,13 @@ def add_field(
             nr_remote=remote_stations if remote_stations is not None and remote_stations >= 0 else None,
             nr_international=international_stations if international_stations is not None and international_stations >= 0 else None,
             number_subbands_requested=len(products),
-            freq_min_mhz=selected_min,
-            freq_max_mhz=selected_max,
+            freq_min_mhz=minfreq,
+            freq_max_mhz=maxfreq,
             frequency_resolution_hz=width if width is not None and 0 < width < float("inf") else None,
             time_resolution_s=interval if interval is not None and 0 < interval < float("inf") else None,
         )
     else:
-        values.update(freq_min_mhz=freq_min_mhz, freq_max_mhz=freq_max_mhz,
-                      number_subbands_requested=number_subbands)
+        values.update(freq_min_mhz=freq_min_mhz, freq_max_mhz=freq_max_mhz)
     columns = ", ".join(values)
     placeholders = ", ".join("?" for _ in values)
     print(f"Adding field {field_name} to {table_name} in {dbname}")
