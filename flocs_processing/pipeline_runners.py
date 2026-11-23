@@ -1442,7 +1442,6 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
     print(
         f"Preparing input for DDF subtract of {field['target_name']} {field['sas_id_target']}"
     )
-    db.set_status_processing(field["target_name"], "prepare_ddf_subtract", field["sas_id_target"])
     outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
@@ -1497,6 +1496,8 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
         else:
             dp3_cmd = f"apptainer exec $CWL_SINGULARITY_CACHE/astronrd_linc_latest.sif DP3 numthreads=2 msin={ms} msout={out_ms} msout.uvwcompression=False  msout.antennacompression=False msout.scalarflags=False msout.storagemanager=Dysco steps=[]"
         submit_cmd = f'sbatch -A {SLURM_ACCOUNT} -p {SLURM_QUEUE} --time=08:00:00 -c 2 --job-name=dp3_avg_{ms.stem} --wrap="{dp3_cmd}"'
+        if not jobids:
+            db.set_status_processing(field["target_name"], "prepare_ddf_subtract", field["sas_id_target"])
         print(f"Submitting: {submit_cmd}")
         proc = subprocess.run(submit_cmd, shell=True, text=True, capture_output=True)
         if proc.returncode:
@@ -1536,14 +1537,13 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
     mses_delay_corrected = list(target_ms_path.glob("*.dp3concat"))
     db.set_status_finished(
         field["target_name"], "prepare_ddf_subtract", field["sas_id_target"],
-        profiling={"slurm_jobs": get_job_profiles(completed_jobids)},
+        profiling={"slurm_jobs": get_job_profiles(completed_jobids)} if completed_jobids else None,
     )
     return mses_delay_corrected
 
 
 def run_prepare_ddf(field, db: FlocsDB):
     print(f"Preparing DDF input for {field['target_name']} {field['sas_id_target']}")
-    db.set_status_processing(field["target_name"], "prepare_ddf", field["sas_id_target"])
     outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
     logsdir = os.path.join(outdir, "logs")
     if not os.path.isdir(outdir):
@@ -1601,6 +1601,8 @@ def run_prepare_ddf(field, db: FlocsDB):
             dp3_cmd = f"apptainer exec $CWL_SINGULARITY_CACHE/astronrd_linc_latest.sif DP3 numthreads=2 msin={ms} msout={out_ms} msout.uvwcompression=False  msout.antennacompression=False msout.scalarflags=False msout.storagemanager=Dysco steps=[filter,average] average.timeresolution=8 average.freqresolution=97.64kHz filter.remove=True filter.baseline='[CR]S*&&'"
         dp3_cmd += f" && touch {shlex.quote(str(out_ms / '.flocs-prepared'))}"
         submit_cmd = f"sbatch -A {SLURM_ACCOUNT} -p {SLURM_QUEUE} --time=02:00:00 -c 2 --job-name=dp3_avg_{ms.stem} --wrap={shlex.quote(dp3_cmd)}"
+        if not jobids:
+            db.set_status_processing(field["target_name"], "prepare_ddf", field["sas_id_target"])
         print(f"Submitting: {submit_cmd}")
         proc = subprocess.run(submit_cmd, shell=True, text=True, capture_output=True)
         if proc.returncode:
@@ -1642,7 +1644,7 @@ def run_prepare_ddf(field, db: FlocsDB):
 
     db.set_status_finished(
         field["target_name"], "prepare_ddf", field["sas_id_target"],
-        profiling={"slurm_jobs": get_job_profiles(completed_jobids)},
+        profiling={"slurm_jobs": get_job_profiles(completed_jobids)} if completed_jobids else None,
     )
     return mses_averaged
 

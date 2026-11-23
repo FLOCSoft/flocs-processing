@@ -594,8 +594,18 @@ def pilot_single_target():
         return field
 
     @task(trigger_rule=TriggerRule.ALL_DONE)
-    def select_best_calibrator(field, result1, result2):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+    def select_best_calibrator():
+        context = get_current_context()
+        dag_id = context["dag"].dag_id
+        run_id = context["dag_run"].run_id
+        states = context["ti"].get_task_states(
+            dag_id=dag_id, run_ids=[run_id], task_ids=["download_field"]
+        )
+        if states.get(run_id, {}).get("download_field") != "success":
+            raise AirflowSkipException("Target download did not succeed in this workflow run.")
+        field = CURRENT_DB.get_run_field(f"{dag_id}:{run_id}")
+        if not field:
+            raise AirflowFailException("No field is assigned to this workflow run.")
         result1 = field if (
             field["sas_id_calibrator1"] and CURRENT_DB.get_step_status(
                 field["target_name"], "calibrator1", field["sas_id_target"]
@@ -758,7 +768,8 @@ def pilot_single_target():
     field = download_field(get_field)
     result_cal1 = run_linc_calibrator1(field)
     result_cal2 = run_linc_calibrator2(field)
-    best_cal = select_best_calibrator(field, result_cal1, result_cal2)
+    best_cal = select_best_calibrator()
+    [field, result_cal1, result_cal2] >> best_cal
     result_targ = run_linc_target(best_cal)
     linc_is_valid = validate_linc_target(result_targ)
     result_vlbi_delay = run_vlbi_delay(linc_is_valid)
@@ -775,7 +786,8 @@ def pilot_single_target():
     result_vlbi_dd = run_vlbi_ddcal(result_vlbi_delay)
 
     (await_approval_delay >> result_vlbi_dd)
-    finish_field(result_vlbi_dd)
+    finished = finish_field(result_vlbi_dd)
+    field >> finished
 
 
 pilot_single_target()

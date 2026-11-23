@@ -458,8 +458,18 @@ def ilotss():
         return field
 
     @task(trigger_rule=TriggerRule.ALL_DONE)
-    def select_best_calibrator(field, result1, result2):
-        field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
+    def select_best_calibrator():
+        context = get_current_context()
+        dag_id = context["dag"].dag_id
+        run_id = context["dag_run"].run_id
+        states = context["ti"].get_task_states(
+            dag_id=dag_id, run_ids=[run_id], task_ids=["download_field"]
+        )
+        if states.get(run_id, {}).get("download_field") != "success":
+            raise AirflowSkipException("Target download did not succeed in this workflow run.")
+        field = CURRENT_DB.get_run_field(f"{dag_id}:{run_id}")
+        if not field:
+            raise AirflowFailException("No field is assigned to this workflow run.")
         result1 = field if (
             field["sas_id_calibrator1"] and CURRENT_DB.get_step_status(
                 field["target_name"], "calibrator1", field["sas_id_target"]
@@ -775,7 +785,8 @@ def ilotss():
     field = download_field(get_field)
     result_cal1 = run_linc_calibrator1(field)
     result_cal2 = run_linc_calibrator2(field)
-    best_cal = select_best_calibrator(field, result_cal1, result_cal2)
+    best_cal = select_best_calibrator()
+    [field, result_cal1, result_cal2] >> best_cal
     result_targ = run_linc_target(best_cal)
     linc_is_valid = validate_linc_target(result_targ)
     result_vlbi_delay = run_vlbi_delay(linc_is_valid)
@@ -803,6 +814,7 @@ def ilotss():
     _result_vlbi_facet_img_0p3 = run_vlbi_facet_imaging_0p3(result_vlbi_facet_subtract)
 
     finished = finish_field(result_vlbi_facet_subtract)
+    field >> finished
     [
         _result_vlbi_facet_img_6p0, _result_vlbi_facet_img_3p0,
         _result_vlbi_facet_img_1p5, _result_vlbi_facet_img_0p6,
