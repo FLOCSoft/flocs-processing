@@ -583,7 +583,7 @@ def run_pilot_delay_toil(field, db: FlocsDB, mode="widefield"):
             raise RuntimeError
 
 
-def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield", skip_unreliable_selfcal: bool = False):
+def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
     print(
         f"Processing ILT dd calibration for {field['target_name']} {field['sas_id_target']}"
     )
@@ -632,7 +632,7 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield", skip_unreliabl
         )
 
         cmd = f"flocs-run vlbi dd-calibration --runner cwltool --scheduler slurm --slurm-cores 64 --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
-    if skip_unreliable_selfcal:
+    if mode == "widefield":
         cmd += " --skip-unreliable-selfcal"
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
@@ -689,7 +689,7 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield", skip_unreliabl
                     )
 
 
-def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield", skip_unreliable_selfcal: bool = False):
+def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
     print(
         f"Processing ILT dd calibration for {field['target_name']} {field['sas_id_target']}"
     )
@@ -774,7 +774,7 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield", skip_unrel
                     )
                 print(f"Resuming failed PILOT run in {flocs_workdir}")
                 cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --runner toil --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
-    if skip_unreliable_selfcal:
+    if mode == "widefield":
         cmd += " --skip-unreliable-selfcal"
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)

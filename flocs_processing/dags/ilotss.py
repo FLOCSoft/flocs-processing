@@ -614,9 +614,9 @@ def ilotss():
             return field
         else:
             if CWL_RUNNER_PILOT_DDCAL == "cwltool":
-                run_pilot_ddcal_cwltool(field, CURRENT_DB, mode="widefield", skip_unreliable_selfcal=True)
+                run_pilot_ddcal_cwltool(field, CURRENT_DB, mode="widefield")
             elif CWL_RUNNER_PILOT_DDCAL == "toil":
-                run_pilot_ddcal_toil(field, CURRENT_DB, mode="widefield", skip_unreliable_selfcal=True)
+                run_pilot_ddcal_toil(field, CURRENT_DB, mode="widefield")
             else:
                 raise RuntimeError("Invalid CWL runner specified.")
         return field
