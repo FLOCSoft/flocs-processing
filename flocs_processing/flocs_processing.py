@@ -210,7 +210,8 @@ def create_database(
         pointing_ra_deg REAL,
         pointing_dec_deg REAL,
         integration_hours REAL,
-        number_subbands INTEGER,
+        number_subbands_requested INTEGER,
+        number_subbands_downloaded INTEGER,
         freq_min_mhz REAL,
         freq_max_mhz REAL,
         frequency_resolution_hz REAL,
@@ -372,14 +373,15 @@ def add_field(
             nr_core=core_stations if core_stations is not None and core_stations >= 0 else None,
             nr_remote=remote_stations if remote_stations is not None and remote_stations >= 0 else None,
             nr_international=international_stations if international_stations is not None and international_stations >= 0 else None,
-            number_subbands=len(subbands) if None not in subbands and min(subbands) >= 0 else None,
+            number_subbands_requested=len(products),
             freq_min_mhz=selected_min,
             freq_max_mhz=selected_max,
             frequency_resolution_hz=width if width is not None and 0 < width < float("inf") else None,
             time_resolution_s=interval if interval is not None and 0 < interval < float("inf") else None,
         )
     else:
-        values.update(freq_min_mhz=freq_min_mhz, freq_max_mhz=freq_max_mhz, number_subbands=number_subbands)
+        values.update(freq_min_mhz=freq_min_mhz, freq_max_mhz=freq_max_mhz,
+                      number_subbands_requested=number_subbands)
     columns = ", ".join(values)
     placeholders = ", ".join("?" for _ in values)
     print(f"Adding field {field_name} to {table_name} in {dbname}")

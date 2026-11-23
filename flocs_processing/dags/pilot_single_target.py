@@ -2,7 +2,11 @@ from enum import Enum
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
 from flocs_processing.flocs_processing import get_target_products, set_target_surls, parse_target_coordinates
 from flocs_processing.pipeline_runners import (
+    MIN_TARGET_FRACTION,
     check_target_subbands,
+    finish_target_download,
+    target_ms_names_from_uris,
+    target_ms_paths,
     get_most_recent_run,
     run_linc_calibrator_cwltool,
     run_linc_calibrator_toil,
@@ -17,6 +21,7 @@ from flocs_processing.pipeline_runners import (
 import configparser
 import datetime
 import getpass
+import math
 import socket
 import glob
 import io
@@ -210,6 +215,8 @@ def pilot_single_target():
 
     @task
     def download_field(field):
+        if field.get("workflow_run_id"):
+            field = CURRENT_DB.get_run_field(field["workflow_run_id"]) or field
         ACCEPTED_ONLINE_FRACTION = 0.95
         MAX_RESCHEDULES_CALIBRATOR = 3
         MAX_RESCHEDULES_TARGET = 3
@@ -234,10 +241,12 @@ def pilot_single_target():
                     print(
                         f"Updating target SAS id in database {field['sas_id_target']:s} -> {actual_sasid:s}"
                     )
-                # Slice to strip of the L prefix
-                CURRENT_DB.update_target_sas_id(field["sas_id_target"], actual_sasid)
-            field["sas_id_target"] = actual_sasid
-            check_target_subbands(field)
+            if field["sas_id_target"] != actual_sasid or field["number_subbands_downloaded"] is None:
+                return finish_target_download(
+                    dict(field, sas_id_target=actual_sasid), CURRENT_DB,
+                    old_sas_id=field["sas_id_target"],
+                )
+            check_target_subbands(field, CURRENT_DB)
             return field
         else:
             database_target_sasid = str(field["sas_id_target"])
@@ -246,7 +255,7 @@ def pilot_single_target():
             num_downloaded_calib1 = 0
             num_downloaded_calib2 = 0
             num_staged_calib = 0
-            num_staged_targ = 0
+            requested_ms = None
             if os.path.exists(f"srms_{field['sas_id_target']}_calibrators.txt"):
                 print("Found srm file; counting calibrator SRMs.")
                 out = subprocess.check_output(
@@ -257,13 +266,10 @@ def pilot_single_target():
                 num_staged_calib = int(out.strip())
 
             if os.path.exists(f"srms_{field['sas_id_target']}.txt"):
-                print("Found srm file; counting target SRMs.")
-                out = subprocess.check_output(
-                    f"wc -l srms_{field['sas_id_target']}.txt | cut -f 1 -d ' '",
-                    text=True,
-                    shell=True,
+                print("Found srm file; reading requested target MeasurementSets.")
+                requested_ms = target_ms_names_from_uris(
+                    pathlib.Path(f"srms_{field['sas_id_target']}.txt").read_text().splitlines()
                 )
-                num_staged_targ = int(out.strip())
 
             if ("sas_id_target" not in field) or (not field["sas_id_target"]):
                 raise AirflowFailException(
@@ -316,30 +322,14 @@ def pilot_single_target():
                 stage_calibrators = True
                 calibrator_downloaded = False
 
-            stage_target = False
-            ms_folder = f"L{field['sas_id_target']}"
-            target_full_path = os.path.join(
-                field["input_location"], "target", ms_folder
+            expected = field["number_subbands_requested"]
+            num_downloaded_targ = len(target_ms_paths(field))
+            target_downloaded = bool(
+                requested_ms
+                and (expected is None or len(requested_ms) == expected)
+                and num_downloaded_targ >= math.ceil(MIN_TARGET_FRACTION * len(requested_ms))
             )
-            if os.path.exists(target_full_path):
-                num_downloaded_targ = len(
-                    list(pathlib.Path(target_full_path).glob("*.MS"))
-                )
-                if num_downloaded_targ == num_staged_targ:
-                    print(
-                        f"Number of staged target MSes ({num_staged_targ}) equals number of downloaded MSes ({num_downloaded_targ}); not staging target again."
-                    )
-                    stage_target = False
-                    target_downloaded = True
-                else:
-                    print(
-                        f"Number of staged target MSes ({num_staged_targ}) does NOT equal number of downloaded MSes ({num_downloaded_targ}); staging target again and resuming download."
-                    )
-                    stage_target = True
-                    target_downloaded = False
-            else:
-                stage_target = True
-                target_downloaded = False
+            stage_target = not target_downloaded
 
             if stage_calibrators or stage_target:
                 print(f"Field {field['sas_id_target']} is not downloaded.")
@@ -439,10 +429,12 @@ def pilot_single_target():
                         f"{field['target_name']} ({field['sas_id_target']}): {err}"
                     ) from err
                 set_target_surls(stager, field, minfreq, maxfreq)
-                expected = field["number_subbands"]
-                if expected is not None and len(stager.target_uris) != expected:
+                requested_ms = target_ms_names_from_uris(stager.target_uris)
+                if not requested_ms:
+                    raise AirflowFailException("No target subbands found in the selected frequency range.")
+                if expected is not None and len(requested_ms) != expected:
                     raise AirflowFailException(
-                        f"Expected {expected} target subbands, found {len(stager.target_uris)} in the selected frequency range."
+                        f"Expected {expected} target subbands, found {len(requested_ms)} in the selected frequency range."
                     )
                 if stage_calibrators:
                     stager.find_nearest_calibrators(2, 120, 168)
@@ -457,9 +449,7 @@ def pilot_single_target():
                         )
                     stage_id_target = stager.stage_target()
             else:
-                check_target_subbands(field)
-                CURRENT_DB.set_field_downloaded(field["target_name"], field["sas_id_target"])
-                return field
+                return finish_target_download(field, CURRENT_DB, requested_ms)
 
             calibrator_staged = False
             target_staged = False
@@ -507,7 +497,11 @@ def pilot_single_target():
                                 raise RuntimeError
 
                 if not target_downloaded:
-                    if get_status(stage_id_target) == STAGING_STATUS.partial_success:
+                    target_status = get_status(stage_id_target)
+                    if target_status in (STAGING_STATUS.failed, STAGING_STATUS.aborted):
+                        CURRENT_DB.set_status_failed(field["target_name"], "download", field["sas_id_target"])
+                        raise AirflowFailException(f"Target staging {stage_id_target} {target_status}.")
+                    if target_status == STAGING_STATUS.partial_success:
                         if schedule_tries_tar < MAX_RESCHEDULES_TARGET:
                             print(
                                 f"Partial success for target; rescheduling {MAX_RESCHEDULES_TARGET - schedule_tries_tar} more times."
@@ -515,11 +509,15 @@ def pilot_single_target():
                             reschedule(stage_id_target)
                             schedule_tries_tar += 1
                             continue
-                    if len(get_surls_online(stage_id_target)) >= int(
-                        ACCEPTED_ONLINE_FRACTION
-                        * len(get_surls_requested(stage_id_target))
-                    ):
+                    online = len(get_surls_online(stage_id_target))
+                    required = math.ceil(MIN_TARGET_FRACTION * len(requested_ms))
+                    if online >= required:
                         target_staged = True
+                    elif target_status in (STAGING_STATUS.success, STAGING_STATUS.partial_success):
+                        CURRENT_DB.set_status_failed(field["target_name"], "download", field["sas_id_target"])
+                        raise AirflowFailException(
+                            f"Target staging {stage_id_target} has only {online} online products; at least {required} are required."
+                        )
                     if target_staged and not target_downloaded:
                         dl_path = os.path.join(field["input_location"], "target")
                         cmd = f"flocs-lta download --outdir {dl_path} {stage_id_target}"
@@ -536,28 +534,22 @@ def pilot_single_target():
                             proc = subprocess.run(
                                 cmd, shell=True, text=True, stdout=f_out, stderr=f_err
                             )
-                            if not proc.returncode:
-                                obsids = [
-                                    path for path in pathlib.Path(dl_path).glob("L*")
-                                    if any(path.glob("*.MS"))
-                                ]
-                                if len(obsids) != 1:
-                                    raise RuntimeError("Expected one downloaded target observation directory.")
-                                actual_sasid = obsids[0].name[1:]
-                                check_target_subbands(dict(field, sas_id_target=actual_sasid))
-                                CURRENT_DB.update_target_sas_id(
-                                    database_target_sasid, actual_sasid
-                                )
-                                database_target_sasid = actual_sasid
-                                field["sas_id_target"] = actual_sasid
-                                target_downloaded = True
-                            else:
-                                raise RuntimeError
+                            if proc.returncode:
+                                print("Target download returned a nonzero exit code; verifying the downloaded MeasurementSets.")
+                            obsids = [
+                                path for path in pathlib.Path(dl_path).glob("L*")
+                                if any(path.glob("*.MS"))
+                            ]
+                            if len(obsids) != 1:
+                                CURRENT_DB.set_status_failed(field["target_name"], "download", database_target_sasid)
+                                raise RuntimeError("Expected one downloaded target observation directory.")
+                            actual_sasid = obsids[0].name[1:]
+                            target_downloaded = True
                 if calibrator_downloaded and target_downloaded:
-                    CURRENT_DB.update_target_sas_id(database_target_sasid, actual_sasid)
-                    field["sas_id_target"] = actual_sasid
-                    check_target_subbands(field)
-                    CURRENT_DB.set_field_downloaded(field["target_name"], actual_sasid)
+                    field = finish_target_download(
+                        dict(field, sas_id_target=actual_sasid), CURRENT_DB, requested_ms,
+                        old_sas_id=database_target_sasid,
+                    )
                     break
                 time.sleep(60)
             return field

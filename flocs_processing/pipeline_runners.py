@@ -8,6 +8,7 @@ import shlex
 import statistics
 import subprocess
 import time
+from urllib.parse import unquote, urlsplit
 
 from airflow.exceptions import AirflowFailException
 from airflow.sdk import get_current_context
@@ -69,18 +70,104 @@ def get_most_recent_run(searchpath: str, sas_id: str, pipeline: str) -> pathlib.
         raise RuntimeError(f"No {pipeline} run for {sas_id} found")
 
 
-def check_target_subbands(field):
-    expected = field.get("number_subbands")
-    if expected is None:
-        return
+MIN_TARGET_FRACTION = 0.95
+
+
+def target_ms_paths(field):
     input_root = field.get("input_location") or os.path.join(DATA_DIR, field["target_name"])
     target = pathlib.Path(input_root) / "target" / f"L{field['sas_id_target']}"
-    actual = sum(ms.is_dir() for ms in target.glob("*.MS"))
-    if actual != expected:
+    paths = sorted(target.glob("*.MS"))
+    if any(not path.is_dir() for path in paths):
+        raise AirflowFailException(f"Expected MeasurementSet directories in {target}.")
+    return paths
+
+
+def target_ms_names_from_uris(uris):
+    names = set()
+    for uri in uris:
+        basename = pathlib.PurePosixPath(unquote(urlsplit(uri).path)).name
+        stem, extension, _ = basename.partition(".MS")
+        if not stem or not extension:
+            raise AirflowFailException(f"Cannot identify a MeasurementSet name from {basename}.")
+        name = stem + extension
+        if name in names:
+            raise AirflowFailException(f"Multiple requested archives map to {name}.")
+        names.add(name)
+    return names
+
+
+def check_target_subbands(field, db):
+    recorded = db.get_downloaded_target_ms(field["sas_id_target"])
+    names = [path.name for path in target_ms_paths(field)]
+    if not recorded or field["number_subbands_downloaded"] != len(names) or names != recorded:
         raise AirflowFailException(
-            f"Expected {expected} target subband MSes in {target}, found {actual}. "
-            "Use an input directory containing only the selected subbands."
+            "The local target MeasurementSets differ from the verified download. "
+            "Restore the recorded inputs or reset the download step."
         )
+
+
+def validate_target_ms(path, minfreq, maxfreq):
+    from casacore.tables import table
+    from flocs_lta.lta_download import is_valid_ms
+
+    if not is_valid_ms(str(path)):
+        raise AirflowFailException(f"Target MeasurementSet is incomplete or unreadable: {path}.")
+    if minfreq is None and maxfreq is None:
+        return
+    with table(str(path / "SPECTRAL_WINDOW"), readonly=True, ack=False) as spectral:
+        frequencies = spectral.getcol("CHAN_FREQ")
+    low, high = frequencies.min(), frequencies.max()
+    if (not math.isfinite(low) or not math.isfinite(high)
+            or (minfreq is not None and low < minfreq * 1e6 - 1)
+            or (maxfreq is not None and high > maxfreq * 1e6 + 1)):
+        raise AirflowFailException(f"Target MeasurementSet is outside the requested frequency range: {path}.")
+
+
+def _verify_target_download(field, requested_ms, recorded):
+    paths = target_ms_paths(field)
+    names = [path.name for path in paths]
+    requested = field["number_subbands_requested"]
+    if recorded is not None and recorded != names:
+        raise AirflowFailException("The local target MeasurementSets differ from the verified download.")
+    if requested_ms is not None:
+        if requested is not None and len(requested_ms) != requested:
+            raise AirflowFailException("The archive request does not match the registered subband count.")
+        requested = len(requested_ms)
+        unexpected = set(names) - requested_ms
+        if unexpected:
+            raise AirflowFailException(
+                f"Target directory contains unrequested MeasurementSets: {', '.join(sorted(unexpected))}."
+            )
+        minimum = math.ceil(MIN_TARGET_FRACTION * requested)
+    else:
+        # A local download without an archive request needs the full known selection.
+        minimum = len(recorded) if recorded is not None else requested
+    if not names or (minimum is not None and len(names) < minimum):
+        raise AirflowFailException(
+            f"Found {len(names)} target MeasurementSets, need at least {minimum or 1}."
+        )
+    if requested is not None and len(names) > requested:
+        raise AirflowFailException(f"Found {len(names)} target MeasurementSets, requested {requested}.")
+    for path in paths:
+        validate_target_ms(path, field["freq_min_mhz"], field["freq_max_mhz"])
+    return names, requested
+
+
+def finish_target_download(field, db, requested_ms=None, old_sas_id=None):
+    """Verify target data before recording the download as complete."""
+    target = old_sas_id or field["sas_id_target"]
+    recorded = db.get_downloaded_target_ms(target)
+    try:
+        names, requested = _verify_target_download(field, requested_ms, recorded)
+    except AirflowFailException:
+        if db.is_step_processing(field["target_name"], "download", target):
+            db.set_status_failed(field["target_name"], "download", target)
+        raise
+    if old_sas_id is not None:
+        db.update_target_sas_id(old_sas_id, field["sas_id_target"])
+    db.set_field_downloaded(field["target_name"], field["sas_id_target"], target_ms=names,
+                            number_subbands_requested=requested)
+    return dict(field, number_subbands_requested=requested, number_subbands_downloaded=len(names))
 
 
 def get_solution_directions(solution: pathlib.Path) -> dict:
@@ -357,7 +444,7 @@ def run_linc_calibrator_toil(field, calibrator_field: int, db: FlocsDB):
 
 
 def run_linc_target_cwltool(field, db: FlocsDB):
-    check_target_subbands(field)
+    check_target_subbands(field, db)
     print(
         f"Processing target observation {field['target_name']} {field['sas_id_target']} with calibrator {field['sas_id_calibrator_final']}"
     )
@@ -438,7 +525,7 @@ def run_linc_target_cwltool(field, db: FlocsDB):
 
 
 def run_linc_target_toil(field, db: FlocsDB):
-    check_target_subbands(field)
+    check_target_subbands(field, db)
     print(
         f"Processing target observation {field['target_name']} {field['sas_id_target']} with calibrator {field['sas_id_calibrator_final']}"
     )

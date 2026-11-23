@@ -111,7 +111,7 @@ class FlocsDB:
             if path.suffix == ".json" and path.stem in STEPS
         }
 
-    def _write_step(self, path, status, run_id, now, profiling):
+    def _write_step(self, path, status, run_id, now, profiling, target_ms):
         if status == PIPELINE_STATUS.nothing.value:
             path.unlink(missing_ok=True)
             return
@@ -131,6 +131,10 @@ class FlocsDB:
         record = {"status": status, "run_id": run_id}
         if profile:
             record["profiling"] = profile
+        if status in (PIPELINE_STATUS.finished.value, PIPELINE_STATUS.await_approval.value):
+            names = previous.get("target_ms") if target_ms is None else target_ms
+            if names is not None:
+                record["target_ms"] = names
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
         try:
@@ -263,7 +267,8 @@ class FlocsDB:
     def is_step_processing(self, name, identifier, target):
         return self.get_step_status(name, identifier, target) == PIPELINE_STATUS.processing.value
 
-    def _set_step(self, name, identifier, target, status, *, profiling=None):
+    def _set_step(self, name, identifier, target, status, *, profiling=None, target_ms=None,
+                  number_subbands_requested=None):
         owner = self._run_id()
         steps = FACET_STEPS if identifier == "vlbi_facet_imaging" else (identifier,)
         if identifier != "vlbi_facet_imaging" and identifier not in STEPS:
@@ -281,6 +286,13 @@ class FlocsDB:
                         and any(statuses.get(step) == PIPELINE_STATUS.error.value for step in steps))
             statuses.update(dict.fromkeys(steps, status))
             values = {"last_updated_at": self._now()}
+            if identifier == "download":
+                if target_ms is not None:
+                    values["number_subbands_downloaded"] = len(target_ms)
+                    if number_subbands_requested is not None:
+                        values["number_subbands_requested"] = number_subbands_requested
+                elif status not in (PIPELINE_STATUS.finished.value, PIPELINE_STATUS.await_approval.value):
+                    values["number_subbands_downloaded"] = None
             if status != PIPELINE_STATUS.nothing.value:
                 phase = "calibrators" if identifier in {"calibrator1", "calibrator2"} else identifier
                 if identifier in FACET_STEPS:
@@ -304,7 +316,7 @@ class FlocsDB:
             directory = self._step_directory(target)
             for step in steps:
                 self._write_step(directory / f"{step}.json", status, owner or row["workflow_run_id"],
-                                 values["last_updated_at"], profiling)
+                                 values["last_updated_at"], profiling, target_ms)
 
     def reset_field(self, name, target):
         self._update(name, target, {"processing_step": "pending", "status": "queued",
@@ -342,8 +354,12 @@ class FlocsDB:
     def set_status_downloaded(self, name, identifier, target):
         self._set_step(name, identifier, target, PIPELINE_STATUS.downloaded.value)
 
-    def set_field_downloaded(self, name, target):
-        self._set_step(name, "download", target, PIPELINE_STATUS.finished.value)
+    def get_downloaded_target_ms(self, target):
+        return self._read_step_record(self._step_directory(target) / "download.json").get("target_ms")
+
+    def set_field_downloaded(self, name, target, *, target_ms=None, number_subbands_requested=None):
+        self._set_step(name, "download", target, PIPELINE_STATUS.finished.value, target_ms=target_ms,
+                       number_subbands_requested=number_subbands_requested)
 
     def update_target_sas_id(self, old_sas_id: str, new_sas_id: str):
         if not old_sas_id or not new_sas_id:
