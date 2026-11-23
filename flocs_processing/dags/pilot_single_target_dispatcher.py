@@ -32,11 +32,11 @@ CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
 def pilot_single_target_dispatcher():
     @task.short_circuit
     def check_fields():
-        return bool(CURRENT_DB.get_db_columns(intent="vlbi-single-target"))
+        return bool(CURRENT_DB.get_db_columns(intent="PILOT-single-target"))
 
     @task
     def get_unprocessed_field():
-        for dbrow in CURRENT_DB.get_db_columns(intent="vlbi-single-target"):
+        for dbrow in CURRENT_DB.get_db_columns(intent="PILOT-single-target"):
             field = dict(dbrow)
             return field
         raise AirflowSkipException("No unprocessed fields found.")

@@ -38,7 +38,6 @@ def get_target_products(lookup, target_name, sas_id_target, minfreq, maxfreq):
     from awlofar.main.aweimports import AveragingPipeline, CorrelatedDataProduct
 
     pointings = list(lookup.target.subArrayPointings)
-    pipeline_id = None
     if str(lookup.obsid) != str(sas_id_target):
         pipelines = list(
             (AveragingPipeline.observationId == sas_id_target)
@@ -48,7 +47,6 @@ def get_target_products(lookup, target_name, sas_id_target, minfreq, maxfreq):
             raise ValueError(f"Cannot identify a unique averaging pipeline for {sas_id_target}.")
         sapids = {source.subArrayPointingIdentifier for source in pipelines[0].sourceData}
         pointings = [sap for sap in pointings if sap.subArrayPointingIdentifier in sapids]
-        pipeline_id = sas_id_target
     if lookup.sapid is not None:
         pointings = [
             sap for sap in pointings
@@ -80,8 +78,8 @@ def get_target_products(lookup, target_name, sas_id_target, minfreq, maxfreq):
         CorrelatedDataProduct.subArrayPointing.subArrayPointingIdentifier
         == pointing.subArrayPointingIdentifier
     )
-    if pipeline_id:
-        query &= CorrelatedDataProduct.pipeline.observationId == pipeline_id
+    if str(lookup.obsid) != str(sas_id_target):
+        query &= CorrelatedDataProduct.pipeline.observationId == sas_id_target
     else:
         query &= CorrelatedDataProduct.observation.observationId == lookup.obsid
     query &= CorrelatedDataProduct.minimumFrequency >= minfreq
@@ -134,6 +132,14 @@ PIPELINES = Literal[
     "vlbi_facet_imaging_0.3",
 ]
 
+INTENT_PIPELINES = {
+    "PILOT-widefield": ["linc", "ddf-pipeline", "vlbi-delay-widefield"],
+    "PILOT-single-target": ["linc", "vlbi-delay-single-target"],
+}
+COMPONENT_PIPELINES = Literal[
+    "linc", "ddf-pipeline", "vlbi-delay-widefield", "vlbi-delay-single-target"
+]
+
 
 class FIELD_STATUS(Enum):
     nothing = "not started"
@@ -180,12 +186,21 @@ def create_database(
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
     pipelines: Annotated[
-        Literal["vlbi-widefield", "vlbi-single-target"],
-        Parameter(help="Pipeline this database will process."),
-    ] = "vlbi-widefield",
+        Optional[list[str]],
+        Parameter(help="Component pipelines to record for these observations.", consume_multiple=True),
+    ] = None,
+    intent: Annotated[
+        Literal["PILOT-widefield", "PILOT-single-target"],
+        Parameter(help="Workflow this database will process."),
+    ] = "PILOT-widefield",
 ):
-    if pipelines not in {"vlbi-widefield", "vlbi-single-target"}:
-        raise ValueError(f"Unknown processing mode: {pipelines}")
+    if intent not in INTENT_PIPELINES:
+        raise ValueError(f"Unknown processing intent: {intent}")
+    if pipelines is None:
+        pipelines = INTENT_PIPELINES[intent]
+    if not pipelines or any(pipeline not in get_args(COMPONENT_PIPELINES) for pipeline in pipelines):
+        raise ValueError("Provide valid component pipeline names.")
+    pipeline_str = ",".join(pipelines)
     table = '"' + table_name.replace('"', '""') + '"'
     status_columns = ", ".join(
         f"{column} SMALLINT NOT NULL DEFAULT 0" for column in STEP_COLUMNS.values()
@@ -196,8 +211,8 @@ def create_database(
         sas_id_target TEXT PRIMARY KEY NOT NULL,
         project_code TEXT,
         observation_date TEXT,
-        ra_deg REAL,
-        dec_deg REAL,
+        pointing_ra_deg REAL,
+        pointing_dec_deg REAL,
         integration_hours REAL,
         number_subbands INTEGER,
         freq_min_mhz REAL,
@@ -210,7 +225,8 @@ def create_database(
         sas_id_calibrator2 TEXT,
         sas_id_calibrator_final TEXT,
         selected_delay_calibrator TEXT,
-        pipelines TEXT NOT NULL DEFAULT '{pipelines}',
+        intent TEXT NOT NULL DEFAULT '{intent}',
+        pipelines TEXT NOT NULL DEFAULT '{pipeline_str}',
         priority INTEGER NOT NULL DEFAULT 0,
         processing_step TEXT NOT NULL DEFAULT 'pending',
         status TEXT NOT NULL DEFAULT 'queued',
@@ -265,8 +281,12 @@ def add_field(
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
     pipelines: Annotated[
-        Optional[Literal["vlbi-widefield", "vlbi-single-target"]],
-        Parameter(help="Pipeline this field needs to be processed with."),
+        Optional[list[str]],
+        Parameter(help="Component pipelines to record for this field.", consume_multiple=True),
+    ] = None,
+    intent: Annotated[
+        Optional[Literal["PILOT-widefield", "PILOT-single-target"]],
+        Parameter(help="Workflow this field needs to be processed with."),
     ] = None,
     freq_min_mhz: Annotated[
         Optional[float], Parameter(help="Minimum target frequency in MHz (120 by default).")
@@ -291,8 +311,14 @@ def add_field(
         raise ValueError("Provide one or two calibrator SAS IDs.")
     values = dict(target_name=field_name, sas_id_target=sas_id_target)
     values.update(zip(("sas_id_calibrator1", "sas_id_calibrator2"), sas_id_calibrators))
-    if pipelines:
-        values["pipelines"] = pipelines
+    if intent is not None:
+        if intent not in INTENT_PIPELINES:
+            raise ValueError(f"Unknown processing intent: {intent}")
+        values.update(intent=intent, pipelines=",".join(INTENT_PIPELINES[intent]))
+    if pipelines is not None:
+        if not pipelines or any(pipeline not in get_args(COMPONENT_PIPELINES) for pipeline in pipelines):
+            raise ValueError("Provide valid component pipeline names.")
+        values["pipelines"] = ",".join(pipelines)
     if fetch_metadata:
         from flocs_lta.lta_search import ObservationStager
 
@@ -349,8 +375,8 @@ def add_field(
             project_code=str(lookup.project) if lookup.project is not None else None,
             observation_date=date.isoformat() if date and date.year > 1990 else None,
             integration_hours=duration / 3600 if duration is not None and 0 < duration < float("inf") else None,
-            ra_deg=pointing.pointing.rightAscension if pointing.pointing else None,
-            dec_deg=pointing.pointing.declination if pointing.pointing else None,
+            pointing_ra_deg=pointing.pointing.rightAscension if pointing.pointing else None,
+            pointing_dec_deg=pointing.pointing.declination if pointing.pointing else None,
             nr_international=stations if stations is not None and stations >= 0 else None,
             number_subbands=len(subbands) if None not in subbands and min(subbands) >= 0 else None,
             freq_min_mhz=selected_min,

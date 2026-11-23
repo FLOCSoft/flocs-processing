@@ -160,14 +160,14 @@ def ilotss():
         obsid = str(conf.get("sas_id_target") or "")
         run_id = f"{context['dag'].dag_id}:{context['dag_run'].run_id}"
         owned = CURRENT_DB.get_run_field(run_id)
-        rows = [owned] if owned else CURRENT_DB.get_db_columns(obsid, intent="vlbi-widefield")
+        rows = [owned] if owned else CURRENT_DB.get_db_columns(obsid, intent="PILOT-widefield")
         for dbrow in rows:
             row = dict(dbrow)
             if conf.get("target_name") and row["target_name"] != conf["target_name"]:
                 raise AirflowFailException("Requested field name and SAS ID do not match.")
             field = CURRENT_DB.claim_field(
                 row["target_name"], row["sas_id_target"], run_id,
-                pipeline="vlbi-widefield", cluster=parser["DEFAULT"].get("PROCESSING_CLUSTER"),
+                intent="PILOT-widefield", cluster=parser["DEFAULT"].get("PROCESSING_CLUSTER"),
                 user=getpass.getuser(), host=socket.gethostname(),
                 input_location=row["input_location"] or os.path.join(DATA_DIR, row["target_name"]),
                 work_directory=row["work_directory"] or PROCESSING_DIR,
@@ -185,7 +185,7 @@ def ilotss():
         conf = context["dag_run"].conf or {}
         obsid = str(conf.get("sas_id_target") or "")
         run_id = f"{context['dag'].dag_id}:{context['dag_run'].run_id}"
-        fields = CURRENT_DB.get_run_field(run_id) or CURRENT_DB.get_db_columns(obsid, intent="vlbi-widefield")
+        fields = CURRENT_DB.get_run_field(run_id) or CURRENT_DB.get_db_columns(obsid, intent="PILOT-widefield")
         if obsid and not fields:
             raise AirflowFailException(f"Requested target {obsid} is not in the processing database.")
         return bool(fields)

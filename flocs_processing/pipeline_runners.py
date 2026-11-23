@@ -213,7 +213,7 @@ def finish_dd_calibration(field, db, outdir):
         run = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_dd-calibration")
         results = run / "results_VLBI_dd-calibration"
         if not results.is_dir() or (
-            field["pipelines"] == "vlbi-widefield" and not (results / "merged.h5").is_file()
+            field["intent"] == "PILOT-widefield" and not (results / "merged.h5").is_file()
         ):
             raise AirflowFailException(f"Missing final DD calibration output in {results}.")
         db.set_dd_calibrator_scores(
@@ -752,7 +752,7 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
-    if field["pipelines"] == "vlbi-single-target":
+    if field["intent"] == "PILOT-single-target":
         print("Not a widefield imaging run, checking LINC + delay calibration.")
         target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
         target_ms_path = target_path / "results_LINC_target" / "results"
@@ -857,7 +857,7 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
-    if field["pipelines"] == "vlbi-single-target":
+    if field["intent"] == "PILOT-single-target":
         print("Not a widefield imaging run, checking LINC + delay calibration.")
         target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
         target_ms_path = target_path / "results_LINC_target" / "results"

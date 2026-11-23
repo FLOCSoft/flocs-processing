@@ -102,8 +102,8 @@ class FlocsDB:
                 raise LookupError(f"Field {name}, target {target} is missing or belongs to another workflow.")
 
     def get_db_columns(self, obsid: str = "", intent="%"):
-        if intent not in {"%", "vlbi-widefield", "vlbi-single-target"}:
-            raise ValueError(f"Unknown processing mode: {intent}")
+        if intent not in {"%", "PILOT-widefield", "PILOT-single-target"}:
+            raise ValueError(f"Unknown processing intent: {intent}")
         where, parameters = [], []
         if obsid:
             where.append("sas_id_target=?")
@@ -113,7 +113,7 @@ class FlocsDB:
             where.extend(f"COALESCE({column}, 0)<>?" for column in STEP_COLUMNS.values())
             parameters.extend([PIPELINE_STATUS.processing.value] * len(STEP_COLUMNS))
         if intent != "%":
-            where.append("pipelines=?")
+            where.append("intent=?")
             parameters.append(intent)
         with sqlite3.connect(self.DATABASE) as db:
             db.row_factory = sqlite3.Row
@@ -128,7 +128,7 @@ class FlocsDB:
             row = db.execute(f"SELECT * FROM {self._table} WHERE workflow_run_id=?", (run_id,)).fetchone()
             return dict(row) if row is not None else None
 
-    def claim_field(self, name, target, run_id, *, pipeline, cluster=None, user=None, host=None,
+    def claim_field(self, name, target, run_id, *, intent, cluster=None, user=None, host=None,
                     input_location=None, work_directory=None, output_location=None):
         if not run_id:
             raise ValueError("A workflow run ID is required to claim a field.")
@@ -136,8 +136,8 @@ class FlocsDB:
             db.row_factory = sqlite3.Row
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                f"SELECT * FROM {self._table} WHERE target_name=? AND sas_id_target=? AND pipelines=?",
-                (name, str(target), pipeline),
+                f"SELECT * FROM {self._table} WHERE target_name=? AND sas_id_target=? AND intent=?",
+                (name, str(target), intent),
             ).fetchone()
             if row is None:
                 return None

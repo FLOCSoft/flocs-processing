@@ -32,11 +32,11 @@ CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
 def ilotss_dispatcher():
     @task.short_circuit
     def check_fields():
-        return bool(CURRENT_DB.get_db_columns(intent="vlbi-widefield"))
+        return bool(CURRENT_DB.get_db_columns(intent="PILOT-widefield"))
 
     @task
     def get_unprocessed_field():
-        for dbrow in CURRENT_DB.get_db_columns(intent="vlbi-widefield"):
+        for dbrow in CURRENT_DB.get_db_columns(intent="PILOT-widefield"):
             field = dict(dbrow)
             return field
         raise AirflowSkipException("No unprocessed fields found.")
