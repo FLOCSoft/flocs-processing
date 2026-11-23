@@ -219,6 +219,8 @@ def create_database(
         freq_max_mhz REAL,
         frequency_resolution_hz REAL,
         time_resolution_s REAL,
+        nr_core INTEGER,
+        nr_remote INTEGER,
         nr_international INTEGER,
         elevation_mean_deg REAL,
         sas_id_calibrator1 TEXT,
@@ -368,7 +370,9 @@ def add_field(
             raise ValueError("The selected subbands cannot be represented by a single frequency range.")
         date = observation.startTime
         duration = observation.duration
-        stations = observation.nrStationsInternational
+        core_stations = observation.nrStationsCore
+        remote_stations = observation.nrStationsRemote
+        international_stations = observation.nrStationsInternational
         width = next(iter(widths)) if len(widths) == 1 else None
         interval = next(iter(intervals)) if len(intervals) == 1 else None
         values.update(
@@ -377,7 +381,9 @@ def add_field(
             integration_hours=duration / 3600 if duration is not None and 0 < duration < float("inf") else None,
             pointing_ra_deg=pointing.pointing.rightAscension if pointing.pointing else None,
             pointing_dec_deg=pointing.pointing.declination if pointing.pointing else None,
-            nr_international=stations if stations is not None and stations >= 0 else None,
+            nr_core=core_stations if core_stations is not None and core_stations >= 0 else None,
+            nr_remote=remote_stations if remote_stations is not None and remote_stations >= 0 else None,
+            nr_international=international_stations if international_stations is not None and international_stations >= 0 else None,
             number_subbands=len(subbands) if None not in subbands and min(subbands) >= 0 else None,
             freq_min_mhz=selected_min,
             freq_max_mhz=selected_max,
