@@ -14,6 +14,7 @@ from airflow.sdk import get_current_context
 from losoto.h5parm import h5parm
 
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
+from flocs_processing.slurm import get_job_profiles, get_toil_job_profiles
 
 # Need to think of a way to centralise this and not read multiple times here and in the DAG
 if "FLOCS_AIRFLOW_CONFIG" not in os.environ:
@@ -150,16 +151,16 @@ def get_delay_solution(field, db, outdir):
     return solution
 
 
-def finish_delay_calibration(field, db, outdir):
+def finish_delay_calibration(field, db, outdir, profiling=None):
     try:
         get_delay_solution(field, db, outdir)
     except Exception:
-        db.set_status_failed(field["target_name"], "vlbi_delay", field["sas_id_target"])
+        db.set_status_failed(field["target_name"], "vlbi_delay", field["sas_id_target"], profiling=profiling)
         raise
     if NEEDS_MANUAL_APPROVAL_DELAY:
-        db.set_status_await_approval(field["target_name"], "vlbi_delay", field["sas_id_target"])
+        db.set_status_await_approval(field["target_name"], "vlbi_delay", field["sas_id_target"], profiling=profiling)
     else:
-        db.set_status_finished(field["target_name"], "vlbi_delay", field["sas_id_target"])
+        db.set_status_finished(field["target_name"], "vlbi_delay", field["sas_id_target"], profiling=profiling)
 
 
 def get_dd_calibrator_scores(results: pathlib.Path) -> tuple:
@@ -208,7 +209,7 @@ def get_dd_calibrator_scores(results: pathlib.Path) -> tuple:
     return (len(sources), *summary)
 
 
-def finish_dd_calibration(field, db, outdir):
+def finish_dd_calibration(field, db, outdir, profiling=None):
     try:
         run = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_dd-calibration")
         results = run / "results_VLBI_dd-calibration"
@@ -220,9 +221,9 @@ def finish_dd_calibration(field, db, outdir):
             field["target_name"], field["sas_id_target"], *get_dd_calibrator_scores(results)
         )
     except Exception:
-        db.set_status_failed(field["target_name"], "vlbi_dd", field["sas_id_target"])
+        db.set_status_failed(field["target_name"], "vlbi_dd", field["sas_id_target"], profiling=profiling)
         raise
-    db.set_status_finished(field["target_name"], "vlbi_dd", field["sas_id_target"])
+    db.set_status_finished(field["target_name"], "vlbi_dd", field["sas_id_target"], profiling=profiling)
 
 
 def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
@@ -284,6 +285,7 @@ def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
                         field["target_name"],
                         f"calibrator{calibrator_field}",
                         field["sas_id_target"],
+                        profiling={"slurm_jobs": get_job_profiles([jobid])},
                     )
                     break
                 elif (
@@ -291,7 +293,10 @@ def run_linc_calibrator_cwltool(field, calibrator_field: int, db: FlocsDB):
                     or ("TIMEOUT" in status)
                     or ("CANCELLED" in status)
                 ):
-                    db.set_status_failed(field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"])
+                    db.set_status_failed(
+                        field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"],
+                        profiling={"slurm_jobs": get_job_profiles([jobid])},
+                    )
                     raise RuntimeError(
                         f"LINC calibrator for {field['target_name']} {field['sas_id_target']} failed."
                     )
@@ -341,9 +346,13 @@ def run_linc_calibrator_toil(field, calibrator_field: int, db: FlocsDB):
                 field["target_name"],
                 f"calibrator{calibrator_field}",
                 field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
             )
         else:
-            db.set_status_failed(field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"])
+            db.set_status_failed(
+                field["target_name"], f"calibrator{calibrator_field}", field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
+            )
             raise RuntimeError
 
 
@@ -411,6 +420,7 @@ def run_linc_target_cwltool(field, db: FlocsDB):
                         field["target_name"],
                         "target",
                         field["sas_id_target"],
+                        profiling={"slurm_jobs": get_job_profiles([jobid])},
                     )
                     break
                 elif (
@@ -418,7 +428,10 @@ def run_linc_target_cwltool(field, db: FlocsDB):
                     or ("TIMEOUT" in status)
                     or ("CANCELLED" in status)
                 ):
-                    db.set_status_failed(field["target_name"], "target", field["sas_id_target"])
+                    db.set_status_failed(
+                        field["target_name"], "target", field["sas_id_target"],
+                        profiling={"slurm_jobs": get_job_profiles([jobid])},
+                    )
                     raise RuntimeError(
                         f"LINC target for {field['target_name']} {field['sas_id_target']} failed."
                     )
@@ -491,9 +504,13 @@ def run_linc_target_toil(field, db: FlocsDB):
         if success:
             db.set_status_finished(
                 field["target_name"], "target", field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
             )
         else:
-            db.set_status_failed(field["target_name"], "target", field["sas_id_target"])
+            db.set_status_failed(
+                field["target_name"], "target", field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
+            )
             raise RuntimeError
 
 
@@ -601,14 +618,19 @@ def run_pilot_delay_cwltool(field, db: FlocsDB, mode="widefield"):
                 if (status == "RUNNING") or (status == "PENDING"):
                     time.sleep(60)
                 elif status == "COMPLETED":
-                    finish_delay_calibration(field, db, outdir)
+                    finish_delay_calibration(
+                        field, db, outdir, profiling={"slurm_jobs": get_job_profiles([jobid])},
+                    )
                     break
                 elif (
                     (status == "FAILED")
                     or ("TIMEOUT" in status)
                     or ("CANCELLED" in status)
                 ):
-                    db.set_status_failed(field["target_name"], "vlbi_delay", field["sas_id_target"])
+                    db.set_status_failed(
+                        field["target_name"], "vlbi_delay", field["sas_id_target"],
+                        profiling={"slurm_jobs": get_job_profiles([jobid])},
+                    )
                     raise RuntimeError(
                         f"PILOT delay calibration for {field['target_name']} {field['sas_id_target']} failed."
                     )
@@ -736,9 +758,14 @@ def run_pilot_delay_toil(field, db: FlocsDB, mode="widefield"):
                 success = True
 
         if success:
-            finish_delay_calibration(field, db, outdir)
+            finish_delay_calibration(
+                field, db, outdir, profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)}
+            )
         else:
-            db.set_status_failed(field["target_name"], "vlbi_delay", field["sas_id_target"])
+            db.set_status_failed(
+                field["target_name"], "vlbi_delay", field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
+            )
             raise RuntimeError
 
 
@@ -833,14 +860,19 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
                 if (status == "RUNNING") or (status == "PENDING"):
                     time.sleep(60)
                 elif status == "COMPLETED":
-                    finish_dd_calibration(field, db, outdir)
+                    finish_dd_calibration(
+                        field, db, outdir, profiling={"slurm_jobs": get_job_profiles([jobid])},
+                    )
                     break
                 elif (
                     (status == "FAILED")
                     or ("TIMEOUT" in status)
                     or ("CANCELLED" in status)
                 ):
-                    db.set_status_failed(field["target_name"], "vlbi_dd", field["sas_id_target"])
+                    db.set_status_failed(
+                        field["target_name"], "vlbi_dd", field["sas_id_target"],
+                        profiling={"slurm_jobs": get_job_profiles([jobid])},
+                    )
                     raise RuntimeError(
                         f"PILOT direction-dependent calibration for {field['target_name']} {field['sas_id_target']} failed."
                     )
@@ -959,10 +991,13 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
             if pattern.search(f_err.read()):
                 success = True
         if success:
-            finish_dd_calibration(field, db, outdir)
+            finish_dd_calibration(
+                field, db, outdir, profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)}
+            )
         else:
             db.set_status_failed(
-                field["target_name"], "vlbi_dd", field["sas_id_target"]
+                field["target_name"], "vlbi_dd", field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
             )
             raise RuntimeError
 
@@ -1073,12 +1108,14 @@ def run_pilot_intermediate_image_toil(field, db: FlocsDB):
                 field["target_name"],
                 "vlbi_intermediate_img",
                 field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
             )
         else:
             db.set_status_failed(
                 field["target_name"],
                 "vlbi_intermediate_img",
                 field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
             )
             raise RuntimeError
 
@@ -1192,12 +1229,14 @@ def run_pilot_facet_subtract_toil(field, db: FlocsDB):
                 field["target_name"],
                 "vlbi_facet_subtract",
                 field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
             )
         else:
             db.set_status_failed(
                 field["target_name"],
                 "vlbi_facet_subtract",
                 field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
             )
             raise RuntimeError
 
@@ -1300,12 +1339,14 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB, resolution: float = 6.0):
                 field["target_name"],
                 identifier,
                 field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
             )
         else:
             db.set_status_failed(
                 field["target_name"],
                 identifier,
                 field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
             )
             raise RuntimeError
 
@@ -1380,6 +1421,7 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
         jobids.append((jobid, out_ms))
         delay_corrected_mses.append(str(out_ms))
 
+    completed_jobids = []
     while jobids:
         print(f"Polling {len(jobids)} SLURM jobs...")
         remaining = []
@@ -1390,6 +1432,7 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
             ).stdout.strip()
             if status == "COMPLETED":
                 print(f"Job {jobid} completed ({out_ms.name})")
+                completed_jobids.append(jobid)
             elif (
                 (status == "FAILED") or ("TIMEOUT" in status) or ("CANCELLED" in status)
             ):
@@ -1406,6 +1449,7 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
     mses_delay_corrected = list(target_ms_path.glob("*.dp3concat"))
     db.set_status_finished(
         field["target_name"], "prepare_ddf_subtract", field["sas_id_target"],
+        profiling={"slurm_jobs": get_job_profiles(completed_jobids)},
     )
     return mses_delay_corrected
 
@@ -1481,6 +1525,7 @@ def run_prepare_ddf(field, db: FlocsDB):
         jobids.append((jobid, out_ms))
         averaged_mses.append(str(out_ms))
 
+    completed_jobids = []
     while jobids:
         print(f"Polling {len(jobids)} SLURM jobs...")
         remaining = []
@@ -1493,6 +1538,7 @@ def run_prepare_ddf(field, db: FlocsDB):
                 if not (out_ms / ".flocs-prepared").is_file():
                     raise RuntimeError(f"Job {jobid} completed without verified output: {out_ms}")
                 print(f"Job {jobid} completed ({out_ms.name})")
+                completed_jobids.append(jobid)
             elif status.startswith(
                 ("FAILED", "TIMEOUT", "CANCELLED", "OUT_OF_MEMORY", "NODE_FAIL",
                  "PREEMPTED", "BOOT_FAIL", "DEADLINE", "REVOKED")
@@ -1509,6 +1555,7 @@ def run_prepare_ddf(field, db: FlocsDB):
 
     db.set_status_finished(
         field["target_name"], "prepare_ddf", field["sas_id_target"],
+        profiling={"slurm_jobs": get_job_profiles(completed_jobids)},
     )
     return mses_averaged
 
@@ -1602,10 +1649,12 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
         if success:
             db.set_status_finished(
                 field["target_name"], "vlbi_ddf_subtract", field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
             )
         else:
             db.set_status_failed(
-                field["target_name"], "vlbi_ddf_subtract", field["sas_id_target"]
+                field["target_name"], "vlbi_ddf_subtract", field["sas_id_target"],
+                profiling={"slurm_jobs": get_toil_job_profiles(f_out, f_err)},
             )
             raise RuntimeError
 
@@ -1672,6 +1721,7 @@ def launch_ddf_pipeline(field, db: FlocsDB):
                         field["target_name"],
                         "ddf",
                         field["sas_id_target"],
+                        profiling={"slurm_jobs": get_job_profiles([jobid])},
                     )
                     break
                 elif (
@@ -1679,7 +1729,10 @@ def launch_ddf_pipeline(field, db: FlocsDB):
                     or ("TIMEOUT" in status)
                     or ("CANCELLED" in status)
                 ):
-                    db.set_status_failed(field["target_name"], "ddf", field["sas_id_target"])
+                    db.set_status_failed(
+                        field["target_name"], "ddf", field["sas_id_target"],
+                        profiling={"slurm_jobs": get_job_profiles([jobid])},
+                    )
                     raise RuntimeError(
                         f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
                     )

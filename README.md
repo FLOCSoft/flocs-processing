@@ -20,6 +20,8 @@ By default, `add-field` reads observation metadata from the LTA, including the p
 
 Each step records its status in a JSON file under `<dbname>.steps/<table>/<target SAS ID>/`, for example `vlbi_delay.json`. A missing file means the step has no recorded status. Keep the `<dbname>.steps` directory with the database when copying it. Use `update-pipeline-status` to change or clear a step status.
 
+The step JSON also records profiling for the latest attempt. The elapsed time runs from the start of processing to the recorded outcome and includes any time waiting for Slurm. For delay calibration it stops when approval is requested. When Slurm accounting is available, `profiling.slurm_jobs` records the CPU seconds and peak resident memory in bytes for each job, along with its ID, state, elapsed seconds and allocated CPUs.
+
 ## Processing data
 ### Automatic setup via flocs
 To start processing data, Airflow needs to be running. This can be setup automatically via `flocs-processing deploy-airflow`. See its help for options.

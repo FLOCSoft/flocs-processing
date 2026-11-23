@@ -20,6 +20,7 @@ from flocs_processing.pipeline_runners import (
     run_prepare_ddf_subtract,
     launch_ddf_pipeline,
 )
+from flocs_processing.slurm import get_job_profiles
 
 import configparser
 import datetime
@@ -630,6 +631,7 @@ def ilotss():
                             field["target_name"],
                             "ddf",
                             field["sas_id_target"],
+                            profiling={"slurm_jobs": get_job_profiles([jobid])},
                         )
                         return field
                     elif (
@@ -638,7 +640,10 @@ def ilotss():
                         or ("CANCELLED" in status)
                         or ("OUT_OF_MEM" in status)
                     ):
-                        CURRENT_DB.set_status_failed(field["target_name"], "ddf", field["sas_id_target"])
+                        CURRENT_DB.set_status_failed(
+                            field["target_name"], "ddf", field["sas_id_target"],
+                            profiling={"slurm_jobs": get_job_profiles([jobid])},
+                        )
                         raise RuntimeError(
                             f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
                         )

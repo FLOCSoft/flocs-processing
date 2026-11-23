@@ -90,11 +90,14 @@ class FlocsDB:
         return self._steps / self._path_component(target)
 
     @staticmethod
-    def _read_step(path):
+    def _read_step_record(path):
         try:
-            return json.loads(path.read_text())["status"]
+            return json.loads(path.read_text())
         except FileNotFoundError:
-            return PIPELINE_STATUS.nothing.value
+            return {"status": PIPELINE_STATUS.nothing.value}
+
+    def _read_step(self, path):
+        return self._read_step_record(path)["status"]
 
     def _read_steps(self, target):
         directory = self._step_directory(target)
@@ -108,15 +111,30 @@ class FlocsDB:
             if path.suffix == ".json" and path.stem in STEPS
         }
 
-    @staticmethod
-    def _write_step(path, status, run_id):
+    def _write_step(self, path, status, run_id, now, profiling):
         if status == PIPELINE_STATUS.nothing.value:
             path.unlink(missing_ok=True)
             return
+        previous = self._read_step_record(path)
+        profile = previous.get("profiling", {})
+        was_processing = previous["status"] == PIPELINE_STATUS.processing.value
+        if status == PIPELINE_STATUS.processing.value:
+            same_attempt = was_processing and previous.get("run_id") == run_id
+            if not same_attempt or "started_at" not in profile:
+                profile = {"started_at": now}
+        elif was_processing and "started_at" in profile:
+            started_at = datetime.fromisoformat(profile["started_at"])
+            elapsed = (datetime.fromisoformat(now) - started_at).total_seconds()
+            profile.update(ended_at=now, elapsed_seconds=elapsed)
+        if profiling:
+            profile.update({key: value for key, value in profiling.items() if value})
+        record = {"status": status, "run_id": run_id}
+        if profile:
+            record["profiling"] = profile
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
         try:
-            temporary.write_text(json.dumps({"status": status, "run_id": run_id}) + "\n")
+            temporary.write_text(json.dumps(record) + "\n")
             temporary.replace(path)
         finally:
             temporary.unlink(missing_ok=True)
@@ -245,7 +263,7 @@ class FlocsDB:
     def is_step_processing(self, name, identifier, target):
         return self.get_step_status(name, identifier, target) == PIPELINE_STATUS.processing.value
 
-    def _set_step(self, name, identifier, target, status):
+    def _set_step(self, name, identifier, target, status, *, profiling=None):
         owner = self._run_id()
         steps = FACET_STEPS if identifier == "vlbi_facet_imaging" else (identifier,)
         if identifier != "vlbi_facet_imaging" and identifier not in STEPS:
@@ -285,7 +303,8 @@ class FlocsDB:
             )
             directory = self._step_directory(target)
             for step in steps:
-                self._write_step(directory / f"{step}.json", status, owner or row["workflow_run_id"])
+                self._write_step(directory / f"{step}.json", status, owner or row["workflow_run_id"],
+                                 values["last_updated_at"], profiling)
 
     def reset_field(self, name, target):
         self._update(name, target, {"processing_step": "pending", "status": "queued",
@@ -308,17 +327,17 @@ class FlocsDB:
     def set_status_nothing(self, name, identifier, target):
         self._set_step(name, identifier, target, PIPELINE_STATUS.nothing.value)
 
-    def set_status_failed(self, name, identifier, target):
-        self._set_step(name, identifier, target, PIPELINE_STATUS.error.value)
+    def set_status_failed(self, name, identifier, target, *, profiling=None):
+        self._set_step(name, identifier, target, PIPELINE_STATUS.error.value, profiling=profiling)
 
     def set_status_processing(self, name, identifier, target):
         self._set_step(name, identifier, target, PIPELINE_STATUS.processing.value)
 
-    def set_status_await_approval(self, name, identifier, target):
-        self._set_step(name, identifier, target, PIPELINE_STATUS.await_approval.value)
+    def set_status_await_approval(self, name, identifier, target, *, profiling=None):
+        self._set_step(name, identifier, target, PIPELINE_STATUS.await_approval.value, profiling=profiling)
 
-    def set_status_finished(self, name, identifier, target):
-        self._set_step(name, identifier, target, PIPELINE_STATUS.finished.value)
+    def set_status_finished(self, name, identifier, target, *, profiling=None):
+        self._set_step(name, identifier, target, PIPELINE_STATUS.finished.value, profiling=profiling)
 
     def set_status_downloaded(self, name, identifier, target):
         self._set_step(name, identifier, target, PIPELINE_STATUS.downloaded.value)
