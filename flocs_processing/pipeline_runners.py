@@ -1787,16 +1787,25 @@ def _ddf_job_ids_from_log(field) -> list[str]:
     if not stdout_log.is_file():
         raise RuntimeError(f"DDF-pipeline log not found: {stdout_log}; check the existing job before retrying.")
     contents = stdout_log.read_text(errors="replace")
-    matches = list(re.finditer(r"Submitted batch job\s+(\d+)", contents))
+    matches = list(re.finditer(r"Submitted batch job\s+([0-9]+)(?=\s|$)", contents))
     if not matches:
         raise RuntimeError(f"Failed to recover DDF-pipeline job id from {stdout_log}; check the existing job before retrying.")
-    restart = contents.rfind("DDF_RESTART_ATTEMPT rundir=")
-    if restart >= 0:
+    restarts = list(re.finditer("DDF_RESTART_ATTEMPT rundir=", contents))
+    if len(restarts) > 1:
+        raise RuntimeError("DDF-pipeline log contains multiple restart attempts; check the existing jobs before retrying.")
+    if restarts:
+        restart = restarts[0].start()
         before = {match.group(1) for match in matches if match.start() < restart}
-        after = [match.group(1) for match in matches if match.start() > restart]
-        if not after or after[-1] in before:
+        after = {match.group(1) for match in matches if match.start() > restart}
+        if len(before) != 1 or len(after) > 1:
+            raise RuntimeError("DDF-pipeline log contains ambiguous job ids; check the existing jobs before retrying.")
+        if not after or before & after:
             raise RuntimeError("DDF-pipeline restart has no new job id; check its submission before retrying.")
-    return list(dict.fromkeys(match.group(1) for match in matches))
+        return [*before, *after]
+    jobids = list(dict.fromkeys(match.group(1) for match in matches))
+    if len(jobids) != 1:
+        raise RuntimeError("DDF-pipeline log contains ambiguous job ids; check the existing jobs before retrying.")
+    return jobids
 
 
 def get_ddf_job_id_from_log(field) -> str:
