@@ -24,7 +24,6 @@ from flocs_processing.pipeline_runners import (
     run_prepare_ddf_subtract,
     launch_ddf_pipeline,
 )
-from flocs_processing.slurm import get_job_profiles
 
 import configparser
 import datetime
@@ -604,60 +603,10 @@ def ilotss():
     @task
     def run_ddf_pipeline(field):
         field = dict(CURRENT_DB.get_db_columns(field["sas_id_target"])[0])
-        logsdir = os.path.join(field["output_location"], "logs")
-        if CURRENT_DB.is_step_processing(field["target_name"], "ddf", field["sas_id_target"]):
-            print(
-                f"ddf-pipeline for {field['target_name']} {field['sas_id_target']} should be running, attempting to resume polling..."
-            )
-            with open(
-                os.path.join(
-                    logsdir,
-                    f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}.txt",
-                ),
-                "r",
-            ) as f_out:
-                jobid = None
-                for line in f_out.readlines():
-                    if "Submitted batch job" in line:
-                        jobid = line.strip().split()[-1]
-                        break
-                else:
-                    raise AirflowFailException("Failed to recover job id from log.")
-
-                while True:
-                    print(f"Polling DDF-pipeine job {jobid}")
-                    poll_cmd = f"sacct -X -j {jobid} --format=State --noheader"
-                    status = subprocess.run(
-                        poll_cmd, shell=True, text=True, capture_output=True
-                    ).stdout.strip()
-                    if (status == "RUNNING") or (status == "PENDING"):
-                        time.sleep(60)
-                    elif status == "COMPLETED":
-                        CURRENT_DB.set_status_finished(
-                            field["target_name"],
-                            "ddf",
-                            field["sas_id_target"],
-                            profiling={"slurm_jobs": get_job_profiles([jobid])},
-                        )
-                        return field
-                    elif (
-                        (status == "FAILED")
-                        or ("TIMEOUT" in status)
-                        or ("CANCELLED" in status)
-                        or ("OUT_OF_MEM" in status)
-                    ):
-                        CURRENT_DB.set_status_failed(
-                            field["target_name"], "ddf", field["sas_id_target"],
-                            profiling={"slurm_jobs": get_job_profiles([jobid])},
-                        )
-                        raise RuntimeError(
-                            f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
-                        )
-        if step_finished(field, "ddf"):
-            return field
-        else:
-            launch_ddf_pipeline(field, CURRENT_DB)
-            return field
+        resume = CURRENT_DB.is_step_processing(field["target_name"], "ddf", field["sas_id_target"])
+        if resume or not step_finished(field, "ddf"):
+            launch_ddf_pipeline(field, CURRENT_DB, resume=resume)
+        return field
 
     @task
     def run_ddf_subtract(field):
@@ -802,7 +751,7 @@ def ilotss():
     )
     result_prepare_ddf = prepare_ddf(result_vlbi_delay)
     result_ddf = run_ddf_pipeline(result_prepare_ddf)
-    result_prepare_ddf_subtract = prepare_ddf_subtract(result_ddf)
+    result_prepare_ddf_subtract = prepare_ddf_subtract(result_vlbi_delay)
     result_ddf_subtract = run_ddf_subtract(result_prepare_ddf_subtract)
     result_vlbi_dd = run_vlbi_ddcal(result_ddf_subtract)
     result_vlbi_interm_img = run_vlbi_image_intermediate(result_vlbi_dd)
@@ -821,14 +770,8 @@ def ilotss():
         _result_vlbi_facet_img_0p3,
     ] >> finished
 
-    (
-        await_approval_delay
-        >> result_prepare_ddf
-        >> result_ddf
-        >> result_prepare_ddf_subtract
-        >> result_ddf_subtract
-        >> result_vlbi_dd
-    )
+    await_approval_delay >> [result_prepare_ddf, result_prepare_ddf_subtract]
+    [result_prepare_ddf_subtract, result_ddf] >> result_ddf_subtract
 
 
 ilotss()

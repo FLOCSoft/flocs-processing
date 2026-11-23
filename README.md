@@ -25,6 +25,8 @@ Each step records its status in a JSON file under `<dbname>.steps/<table>/<targe
 The step JSON also records profiling for the latest attempt. The elapsed time runs from the start of processing to the recorded outcome and includes any time waiting for Slurm. For delay calibration it stops when approval is requested. When Slurm accounting is available, `profiling.slurm_jobs` records the CPU seconds and peak resident memory in bytes for each job, along with its ID, state, elapsed seconds and allocated CPUs.
 
 ## Processing data
+Widefield DD calibration uses `--skip-unreliable-sources`. Use a version of `flocs-runners` that accepts this option and a PILOT workflow that supports the corresponding `skip_unreliable_sources` input.
+
 ### Automatic setup via flocs
 To start processing data, Airflow needs to be running. This can be setup automatically via `flocs-processing deploy-airflow`. See its help for options.
 

@@ -905,6 +905,8 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
         )
 
         cmd = f"flocs-run vlbi dd-calibration --runner cwltool --scheduler slurm --slurm-cores 64 --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
+    if field["intent"] == "PILOT-widefield":
+        cmd += " --skip-unreliable-sources"
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     print(cmd)
@@ -1051,6 +1053,8 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
                     )
                 print(f"Resuming failed PILOT run in {flocs_workdir}")
                 cmd = f"flocs-run vlbi dd-calibration --record-toil-stats --runner toil --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {flocs_workdir} --restart --outdir {outdir} --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat.sub.ms {target_ms_path}"
+    if field["intent"] == "PILOT-widefield":
+        cmd += " --skip-unreliable-sources"
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     print(cmd)
@@ -1438,6 +1442,28 @@ def run_pilot_facet_imaging_toil(field, db: FlocsDB, resolution: float = 6.0):
             raise RuntimeError
 
 
+def _ddf_subtract_inputs(field, outdir):
+    target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay-calibration")
+    target_ms_path = target_path / "results_VLBI_delay-calibration"
+    mses = sorted(target_ms_path.glob("*.dp3concat"))
+    if mses:
+        return target_ms_path, mses, False
+    linc_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
+    linc_ms_path = linc_path / "results_LINC_target" / "results"
+    mses = sorted(linc_ms_path.glob("*.dp3concat"))
+    if not mses:
+        raise RuntimeError(f"No unaveraged input MSes found at {linc_ms_path}/*.dp3concat")
+    return target_ms_path / "ddf-subtract-inputs", mses, True
+
+
+def _check_ddf_subtract_inputs(target_ms_path, expected):
+    if set(target_ms_path.glob("*.dp3concat")) != set(expected):
+        raise RuntimeError(f"DDF subtraction inputs in {target_ms_path} do not match the expected MeasurementSets.")
+    for ms in expected:
+        if not (ms / ".flocs-prepared").is_file():
+            raise RuntimeError(f"Cannot reuse {ms}: preparation completion is unverified.")
+
+
 def run_prepare_ddf_subtract(field, db: FlocsDB):
     print(
         f"Preparing input for DDF subtract of {field['target_name']} {field['sas_id_target']}"
@@ -1448,54 +1474,48 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
-    target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay")
-    target_ms_path = target_path / "results_VLBI_delay-calibration"
-    mses_unaveraged = list(target_ms_path.glob("*.dp3concat"))
-    delay_sols = ""
-    if not mses_unaveraged:
-        print(
-            "No MSes found in delay-calibration output, will apply delay solutions to LINC."
-        )
-        delay_sols = get_delay_solution(field, db, outdir)
-        sourcedir = next(iter(get_solution_directions(delay_sols).values()))
-        delaydir = f"[{sourcedir[0]},{sourcedir[1]}]"
-        print(f"Using PILOT delay calibration solutions: {delay_sols}")
-
-        linc_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
-        print(f"Using LINC MSes at {linc_path}")
-        linc_ms_path = linc_path / "results_LINC_target" / "results"
-        mses_unaveraged = list(linc_ms_path.glob("*.dp3concat"))
-    mses_unaveraged_pilot = list(target_ms_path.glob("*.dp3concat"))
-    if not mses_unaveraged:
+    try:
+        target_ms_path, mses_unaveraged, needs_correction = _ddf_subtract_inputs(field, outdir)
+    except RuntimeError:
         db.set_status_failed(
             field["target_name"],
             "prepare_ddf_subtract",
             field["sas_id_target"],
         )
-        raise RuntimeError(
-            f"No unaveraged input MSes found at {linc_ms_path}/*.dp3concat"
-        )
-    if mses_unaveraged_pilot and (len(mses_unaveraged_pilot) == len(mses_unaveraged)):
-        print("Appropriate input exists for ddf-pipeline.")
+        raise
+    if not needs_correction:
+        print("Using existing delay-corrected MeasurementSets.")
         db.set_status_finished(
             field["target_name"], "prepare_ddf_subtract", field["sas_id_target"],
         )
-        return mses_unaveraged_pilot
+        return mses_unaveraged
+
+    mses_delay_corrected = [target_ms_path / ms.name for ms in mses_unaveraged]
+    unexpected = set(target_ms_path.glob("*.dp3concat")) - set(mses_delay_corrected)
+    if unexpected:
+        raise RuntimeError(f"Unexpected DDF subtraction inputs in {target_ms_path}.")
+    for ms in mses_delay_corrected:
+        if ms.exists() and not (ms / ".flocs-prepared").is_file():
+            raise RuntimeError(f"Cannot reuse {ms}: preparation completion is unverified.")
+    if all(ms.exists() for ms in mses_delay_corrected):
+        db.set_status_finished(field["target_name"], "prepare_ddf_subtract", field["sas_id_target"])
+        return mses_delay_corrected
+
+    delay_sols = get_delay_solution(field, db, outdir)
+    sourcedir = next(iter(get_solution_directions(delay_sols).values()))
+    delaydir = f"[{sourcedir[0]},{sourcedir[1]}]"
+    print(f"Using PILOT delay calibration solutions: {delay_sols}")
+    target_ms_path.mkdir(parents=True, exist_ok=True)
 
     jobids = []
-    delay_corrected_mses = []
     for ms in mses_unaveraged:
-        out_ms = target_ms_path / f"{ms.stem}.dp3concat"
+        out_ms = target_ms_path / ms.name
         if out_ms.exists():
             print(f"Skipping {out_ms.name}, already exists.")
-            delay_corrected_mses.append(str(out_ms))
             continue
-        if delay_sols:
-            dp3_cmd = f"apptainer exec $CWL_SINGULARITY_CACHE/astronrd_linc_latest.sif DP3 numthreads=2 msin={ms} msout={out_ms} msout.uvwcompression=False  msout.antennacompression=False msout.scalarflags=False msout.storagemanager=Dysco steps=[applybeamdelay,applycal,applybeamtarget] applybeamdelay.type=applybeam applybeamdelay.beammode=full applybeamdelay.updateweights=True applybeamdelay.direction={delaydir} applycal.parmdb={delay_sols} applycal.correction=fulljones applycal.soltab=[amplitude000,phase000] applybeamtarget.type=applybeam applybeamtarget.beammode=full applybeamtarget.updateweights=True"
-            print(dp3_cmd)
-        else:
-            dp3_cmd = f"apptainer exec $CWL_SINGULARITY_CACHE/astronrd_linc_latest.sif DP3 numthreads=2 msin={ms} msout={out_ms} msout.uvwcompression=False  msout.antennacompression=False msout.scalarflags=False msout.storagemanager=Dysco steps=[]"
-        submit_cmd = f'sbatch -A {SLURM_ACCOUNT} -p {SLURM_QUEUE} --time=08:00:00 -c 2 --job-name=dp3_avg_{ms.stem} --wrap="{dp3_cmd}"'
+        dp3_cmd = f"apptainer exec $CWL_SINGULARITY_CACHE/astronrd_linc_latest.sif DP3 numthreads=2 msin={ms} msout={out_ms} msout.uvwcompression=False  msout.antennacompression=False msout.scalarflags=False msout.storagemanager=Dysco steps=[applybeamdelay,applycal,applybeamtarget] applybeamdelay.type=applybeam applybeamdelay.beammode=full applybeamdelay.updateweights=True applybeamdelay.direction={delaydir} applycal.parmdb={delay_sols} applycal.correction=fulljones applycal.soltab=[amplitude000,phase000] applybeamtarget.type=applybeam applybeamtarget.beammode=full applybeamtarget.updateweights=True"
+        dp3_cmd += f" && touch {shlex.quote(str(out_ms / '.flocs-prepared'))}"
+        submit_cmd = f"sbatch -A {SLURM_ACCOUNT} -p {SLURM_QUEUE} --time=08:00:00 -c 2 --job-name=dp3_avg_{ms.stem} --wrap={shlex.quote(dp3_cmd)}"
         if not jobids:
             db.set_status_processing(field["target_name"], "prepare_ddf_subtract", field["sas_id_target"])
         print(f"Submitting: {submit_cmd}")
@@ -1507,7 +1527,6 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
         jobid = proc.stdout.strip().split()[-1]
         print(f"Submitted job {jobid} for {ms.name}")
         jobids.append((jobid, out_ms))
-        delay_corrected_mses.append(str(out_ms))
 
     completed_jobids = []
     while jobids:
@@ -1519,10 +1538,13 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
                 poll_cmd, shell=True, text=True, capture_output=True
             ).stdout.strip()
             if status == "COMPLETED":
+                if not (out_ms / ".flocs-prepared").is_file():
+                    raise RuntimeError(f"Job {jobid} completed without verified output: {out_ms}")
                 print(f"Job {jobid} completed ({out_ms.name})")
                 completed_jobids.append(jobid)
-            elif (
-                (status == "FAILED") or ("TIMEOUT" in status) or ("CANCELLED" in status)
+            elif status.startswith(
+                ("FAILED", "TIMEOUT", "CANCELLED", "OUT_OF_MEMORY", "NODE_FAIL",
+                 "PREEMPTED", "BOOT_FAIL", "DEADLINE", "REVOKED")
             ):
                 raise RuntimeError(
                     f"DP3 averaging job {jobid} failed for {out_ms.name}"
@@ -1534,7 +1556,7 @@ def run_prepare_ddf_subtract(field, db: FlocsDB):
         jobids = remaining
         time.sleep(30)
 
-    mses_delay_corrected = list(target_ms_path.glob("*.dp3concat"))
+    _check_ddf_subtract_inputs(target_ms_path, mses_delay_corrected)
     db.set_status_finished(
         field["target_name"], "prepare_ddf_subtract", field["sas_id_target"],
         profiling={"slurm_jobs": get_job_profiles(completed_jobids)} if completed_jobids else None,
@@ -1657,11 +1679,10 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
-    target_path = get_most_recent_run(
-        outdir, field["sas_id_target"], "VLBI_delay-calibration"
-    )
-    target_ms_path = target_path / "results_VLBI_delay-calibration"
-    print(f"Using data at: {target_path}/*.dp3concat")
+    target_ms_path, mses, needs_correction = _ddf_subtract_inputs(field, outdir)
+    if needs_correction:
+        _check_ddf_subtract_inputs(target_ms_path, [target_ms_path / ms.name for ms in mses])
+    print(f"Using data at: {target_ms_path}/*.dp3concat")
 
     ddf_path = get_most_recent_run(outdir, field["sas_id_target"], "DDF-pipeline")
     ddf_sols_path = ddf_path / "SOLSDIR"
@@ -1748,80 +1769,179 @@ def run_pilot_process_ddf_toil(field, db: FlocsDB):
             raise RuntimeError
 
 
-def launch_ddf_pipeline(field, db: FlocsDB):
+DDF_FAILURE_STATES = (
+    "FAILED", "TIMEOUT", "CANCELLED", "OUT_OF_MEM", "NODE_FAIL", "PREEMPTED",
+    "BOOT_FAIL", "DEADLINE", "REVOKED",
+)
+
+
+def _ddf_pipeline_log_paths(field) -> tuple[pathlib.Path, pathlib.Path]:
+    outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
+    logsdir = pathlib.Path(outdir) / "logs"
+    prefix = f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}"
+    return logsdir / f"{prefix}.txt", logsdir / f"{prefix}_err.txt"
+
+
+def _ddf_job_ids_from_log(field) -> list[str]:
+    stdout_log, _ = _ddf_pipeline_log_paths(field)
+    if not stdout_log.is_file():
+        raise RuntimeError(f"DDF-pipeline log not found: {stdout_log}; check the existing job before retrying.")
+    contents = stdout_log.read_text(errors="replace")
+    matches = list(re.finditer(r"Submitted batch job\s+(\d+)", contents))
+    if not matches:
+        raise RuntimeError(f"Failed to recover DDF-pipeline job id from {stdout_log}; check the existing job before retrying.")
+    restart = contents.rfind("DDF_RESTART_ATTEMPT rundir=")
+    if restart >= 0:
+        before = {match.group(1) for match in matches if match.start() < restart}
+        after = [match.group(1) for match in matches if match.start() > restart]
+        if not after or after[-1] in before:
+            raise RuntimeError("DDF-pipeline restart has no new job id; check its submission before retrying.")
+    return list(dict.fromkeys(match.group(1) for match in matches))
+
+
+def get_ddf_job_id_from_log(field) -> str:
+    return _ddf_job_ids_from_log(field)[-1]
+
+
+def get_ddf_rundir_from_log(field) -> pathlib.Path:
+    stdout_log, stderr_log = _ddf_pipeline_log_paths(field)
+    contents = "\n".join(
+        path.read_text(errors="replace")
+        for path in (stdout_log, stderr_log) if path.is_file()
+    )
+    rundirs = set()
+    for line in contents.splitlines():
+        running = re.search(r"Running DDF-pipeline under \S+ in (.+?)\s*$", line)
+        restart = re.search(r"Attempting to restart existing run from (.+?)\s*$", line)
+        match = running or restart
+        if match:
+            candidates = [match.group(1).strip()]
+            if restart and candidates[0].endswith("."):
+                candidates.append(candidates[0][:-1])
+            for candidate in candidates:
+                path = pathlib.Path(candidate).expanduser()
+                if path.is_dir():
+                    rundirs.add(path.resolve())
+    if len(rundirs) != 1:
+        raise RuntimeError(
+            f"Could not recover a unique existing DDF-pipeline working directory from {stdout_log} or {stderr_log}."
+        )
+    return rundirs.pop()
+
+
+def ddf_restart_attempted(field) -> bool:
+    stdout_log, _ = _ddf_pipeline_log_paths(field)
+    return stdout_log.is_file() and "DDF_RESTART_ATTEMPT rundir=" in stdout_log.read_text(errors="replace")
+
+
+def poll_ddf_job(jobid: str, field, *, wait=True) -> str:
+    while True:
+        print(f"Polling DDF-pipeline job {jobid} for {field['target_name']}")
+        result = subprocess.run(
+            ["sacct", "-X", "-j", jobid, "--format=State", "--noheader"],
+            text=True, capture_output=True,
+        )
+        states = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if result.returncode or len(states) > 1:
+            raise RuntimeError(f"Cannot determine the state of DDF-pipeline job {jobid}; check the existing job before retrying.")
+        status = states[0] if states else ""
+        if not wait or status == "COMPLETED" or status.startswith(DDF_FAILURE_STATES):
+            return status
+        time.sleep(60)
+
+
+def launch_ddf_pipeline(field, db: FlocsDB, *, resume=False):
     print(f"Starting ddf-pipeline for {field['target_name']} {field['sas_id_target']}")
     outdir = field.get("output_location") or os.path.join(OUTPUT_DIR, field["target_name"])
-    logsdir = os.path.join(outdir, "logs")
-    if not os.path.isdir(outdir):
-        os.makedirs(outdir, exist_ok=True)
-    if not os.path.isdir(logsdir):
-        os.makedirs(logsdir, exist_ok=True)
-    target_path = get_most_recent_run(
-        outdir, field["sas_id_target"], "VLBI_delay-calibration"
-    )
-    target_ms_path = target_path / "results_VLBI_delay-calibration"
-    if not list(target_ms_path.glob("*pre-cal.ms")):
-        target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
-        target_ms_path = target_path / "results_LINC_target" / "results"
+    stdout_log, stderr_log = _ddf_pipeline_log_paths(field)
+    stdout_log.parent.mkdir(parents=True, exist_ok=True)
+    jobids = []
+    if resume:
+        jobids = _ddf_job_ids_from_log(field)
+    elif stdout_log.exists() or stderr_log.exists():
+        previous = get_ddf_job_id_from_log(field)
+        status = poll_ddf_job(previous, field, wait=False)
+        if status != "COMPLETED" and not status.startswith(DDF_FAILURE_STATES):
+            raise RuntimeError(
+                f"DDF-pipeline job {previous} is active or its state is uncertain; resume the existing run before starting another."
+            )
 
-    cmd = f"flocs-run ddf-pipeline --scheduler slurm --slurm-time 72:00:00 --slurm-cores 32 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {field.get('work_directory') or PROCESSING_DIR} --outdir {outdir} --config-file {DDF_CONFIG} {target_ms_path}"
-    print(cmd)
-    db.set_status_processing(field["target_name"], "ddf", field["sas_id_target"])
-    with (
-        open(
-            os.path.join(
-                logsdir,
-                f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}.txt",
-            ),
-            "w+",
-        ) as f_out,
-        open(
-            os.path.join(
-                logsdir,
-                f"log_DDF-pipeline_{field['target_name']}_{field['sas_id_target']}_err.txt",
-            ),
-            "w+",
-        ) as f_err,
-    ):
-        proc = subprocess.run(cmd, shell=True, text=True, stdout=f_out, stderr=f_err)
-        jobid = None
-        if not proc.returncode:
-            f_out.seek(0)
-            for line in f_out.readlines():
-                if "Submitted batch job" in line:
-                    jobid = line.strip().split()[-1]
-        else:
-            db.set_status_failed(field["target_name"], "ddf", field["sas_id_target"])
-            raise RuntimeError("Failed to submit job.")
-
-        if not jobid:
-            raise RuntimeError("Failed to retrieve job id")
-        else:
-            while True:
-                print(f"Polling DDF-pipeine job {jobid}")
-                poll_cmd = f"sacct -X -j {jobid} --format=State --noheader"
-                status = subprocess.run(
-                    poll_cmd, shell=True, text=True, capture_output=True
-                ).stdout.strip()
-                if (status == "RUNNING") or (status == "PENDING"):
-                    time.sleep(60)
-                elif status == "COMPLETED":
-                    db.set_status_finished(
-                        field["target_name"],
-                        "ddf",
-                        field["sas_id_target"],
-                        profiling={"slurm_jobs": get_job_profiles([jobid])},
-                    )
-                    break
-                elif (
-                    (status == "FAILED")
-                    or ("TIMEOUT" in status)
-                    or ("CANCELLED" in status)
-                ):
+    submit = not resume
+    restart = False
+    rundir = None
+    while True:
+        if submit:
+            try:
+                target_path = get_most_recent_run(outdir, field["sas_id_target"], "VLBI_delay-calibration")
+                target_ms_path = target_path / "results_VLBI_delay-calibration"
+                if not list(target_ms_path.glob("*pre-cal.ms")):
+                    target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
+                    target_ms_path = target_path / "results_LINC_target" / "results"
+                if not target_ms_path.is_dir():
+                    raise NotADirectoryError(f"DDF-pipeline input directory does not exist: {target_ms_path}")
+            except Exception:
+                db.set_status_failed(
+                    field["target_name"], "ddf", field["sas_id_target"],
+                    profiling={"slurm_jobs": get_job_profiles(jobids)} if jobids else None,
+                )
+                raise
+            cmd = [
+                "flocs-run", "ddf-pipeline", "--scheduler", "slurm", "--slurm-time", "72:00:00",
+                "--slurm-cores", "32", "--slurm-account", SLURM_ACCOUNT, "--slurm-queue", SLURM_QUEUE,
+                "--rundir", str(rundir) if restart else field.get("work_directory") or PROCESSING_DIR,
+                "--outdir", outdir, "--config-file", DDF_CONFIG,
+            ]
+            if restart:
+                cmd.append("--restart")
+            cmd.append(str(target_ms_path))
+            if not restart:
+                db.set_status_processing(field["target_name"], "ddf", field["sas_id_target"])
+            with (
+                stdout_log.open("a+" if restart else "w+", encoding="utf-8") as f_out,
+                stderr_log.open("a+" if restart else "w+", encoding="utf-8") as f_err,
+            ):
+                if restart:
+                    f_out.write(f"DDF_RESTART_ATTEMPT rundir={rundir}\n")
+                f_out.write(f"$ {shlex.join(cmd)}\n")
+                f_out.flush()
+                print(shlex.join(cmd))
+                try:
+                    proc = subprocess.run(cmd, text=True, stdout=f_out, stderr=f_err)
+                except OSError:
                     db.set_status_failed(
                         field["target_name"], "ddf", field["sas_id_target"],
-                        profiling={"slurm_jobs": get_job_profiles([jobid])},
+                        profiling={"slurm_jobs": get_job_profiles(jobids)} if jobids else None,
                     )
-                    raise RuntimeError(
-                        f"DDF-pipeline for {field['target_name']} {field['sas_id_target']} failed."
-                    )
+                    raise
+            recovered = _ddf_job_ids_from_log(field)
+            new_ids = [jobid for jobid in recovered if jobid not in jobids]
+            if len(new_ids) != 1:
+                raise RuntimeError("Could not identify one new DDF-pipeline job; check its submission before retrying.")
+            jobids = recovered
+            if proc.returncode:
+                print("DDF-pipeline launcher returned a nonzero exit code; polling its submitted job.")
+        status = poll_ddf_job(jobids[-1], field)
+        if status == "COMPLETED":
+            db.set_status_finished(
+                field["target_name"], "ddf", field["sas_id_target"],
+                profiling={"slurm_jobs": get_job_profiles(jobids)},
+            )
+            return
+        if restart or ddf_restart_attempted(field):
+            db.set_status_failed(
+                field["target_name"], "ddf", field["sas_id_target"],
+                profiling={"slurm_jobs": get_job_profiles(jobids)},
+            )
+            raise RuntimeError(
+                f"DDF-pipeline restart for {field['target_name']} {field['sas_id_target']} failed with status {status}."
+            )
+        try:
+            rundir = get_ddf_rundir_from_log(field)
+        except RuntimeError:
+            db.set_status_failed(
+                field["target_name"], "ddf", field["sas_id_target"],
+                profiling={"slurm_jobs": get_job_profiles(jobids)},
+            )
+            raise
+        restart = True
+        submit = True
