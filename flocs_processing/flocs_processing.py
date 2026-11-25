@@ -172,7 +172,7 @@ def add_field(
         str, Parameter(help="Sqlite3 database from which processing will be done.")
     ],
     intent: Annotated[
-        Literal["vlbi-widefield"],
+        Literal["vlbi-widefield", "vlbi-single-target"],
         Parameter(help="Workflow this field needs to be processed with."),
     ],
     table_name: Annotated[
@@ -182,8 +182,10 @@ def add_field(
         str, Parameter(help="Pipelines this field needs to be processed with.")
     ] = "",
 ):
-    if not pipelines:
+    if not pipelines and intent == "vlbi-widefield":
         pipelines = "linc,ddf-pipeline,vlbi-delay-widefield"
+    elif not pipelines and intent == "vlbi-single-target":
+        pipelines = "linc,vlbi-delay-single-target"
 
     if _lta_connection_error is not None:
         raise _lta_connection_error
