@@ -45,7 +45,7 @@ class FlocsDB:
         self.TABLE_NAME = db_table
 
     def get_db_columns(self, obsid: str = "", intent="%"):
-        valid_intent = ["widefield", "single-target", "%"]
+        valid_intent = ["widefield", "single-target", "vlbi-widefield", "vlbi-single-target", "%"]
         if intent not in valid_intent:
             raise ValueError(
                 f"Cannot query intent {intent}. Valid options are {', '.join(valid_intent)}"
@@ -55,17 +55,17 @@ class FlocsDB:
             cursor = db.cursor()
             columns = "*"
             if intent != "%":
-                intent = f"%{intent}%"
+                intent = f"%{intent.removeprefix('vlbi-')}%"
             if obsid:
                 field = cursor.execute(
                     f"select {columns} from {self.TABLE_NAME} where sas_id_target=='{obsid}'"
-                    + (f" and pipelines like '{intent}'")
+                    + (f" and coalesce(intent, pipelines) like '{intent}'")
                     + " order by priority desc"
                 ).fetchall()
             else:
                 field = cursor.execute(
-                    f"select {columns} from {self.TABLE_NAME} where status=='not started' or status=='downloaded'"
-                    + (f" and pipelines like '{intent}'")
+                    f"select {columns} from {self.TABLE_NAME} where (status=='not started' or status=='downloaded')"
+                    + (f" and coalesce(intent, pipelines) like '{intent}'")
                     + " order by priority desc"
                 ).fetchall()
             print(field)

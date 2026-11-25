@@ -177,7 +177,14 @@ def add_field(
     pipelines: Annotated[
         str, Parameter(help="Pipelines this field needs to be processed with.")
     ] = "",
+    intent: Annotated[
+        Optional[Literal["vlbi-widefield"]],
+        Parameter(help="Workflow this field needs to be processed with."),
+    ] = None,
 ):
+    if not pipelines and intent == "vlbi-widefield":
+        pipelines = "linc,ddf-pipeline,vlbi-delay-widefield"
+
     if _lta_connection_error is not None:
         raise _lta_connection_error
 
@@ -210,6 +217,7 @@ def add_field(
     date = observation.startTime
     duration = observation.duration
     metadata = {
+        "intent": intent,
         "project_code": lookup.project,
         "pointing_ra_deg": coordinates.rightAscension if coordinates is not None else None,
         "pointing_dec_deg": coordinates.declination if coordinates is not None else None,
@@ -225,6 +233,8 @@ def add_field(
         "nr_international": observation.nrStationsInternational,
         "last_updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    if pipelines:
+        metadata["pipelines"] = pipelines
 
     dbstr = f"insert into {table_name} (target_name"
     if len(sas_id_calibrators) == 1:

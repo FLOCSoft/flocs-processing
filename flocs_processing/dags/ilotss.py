@@ -147,7 +147,7 @@ def ilotss():
     def get_unprocessed_target():
         conf = get_current_context()["dag_run"].conf or {}
         obsid = str(conf.get("sas_id_target") or "")
-        rows = CURRENT_DB.get_db_columns(obsid)
+        rows = CURRENT_DB.get_db_columns(obsid, intent="vlbi-widefield")
         if obsid and not rows:
             raise AirflowFailException(f"Requested target {obsid} is not in the processing database.")
         field = None
@@ -179,7 +179,7 @@ def ilotss():
     def check_fields():
         conf = get_current_context()["dag_run"].conf or {}
         obsid = str(conf.get("sas_id_target") or "")
-        fields = CURRENT_DB.get_db_columns(obsid)
+        fields = CURRENT_DB.get_db_columns(obsid, intent="vlbi-widefield")
         if obsid and not fields:
             raise AirflowFailException(f"Requested target {obsid} is not in the processing database.")
         return bool(fields)
