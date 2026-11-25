@@ -7,7 +7,6 @@ from enum import Enum
 import cyclopts
 import functools
 import math
-import sqlite3
 import subprocess
 import structlog
 from typing import Annotated, Literal, Optional, get_args
@@ -15,50 +14,6 @@ from typing import Annotated, Literal, Optional, get_args
 app = cyclopts.App()
 
 logger = structlog.getLogger()
-
-
-INTENT_PIPELINES = {
-    "PILOT-widefield": ("linc", "ddf-pipeline", "vlbi-delay-widefield"),
-    "PILOT-single-target": ("linc", "vlbi-delay-single-target"),
-}
-PIPELINE_CHECKPOINTS = {
-    "linc": ("calibrator1", "calibrator2", "target"),
-    "ddf-pipeline": ("ddf",),
-    "vlbi-delay-widefield": (
-        "vlbi_delay", "vlbi_dd", "vlbi_ddf_subtract", "vlbi_intermediate_img",
-        "vlbi_facet_subtract", "vlbi_facet_imaging",
-    ),
-    "vlbi-delay-single-target": ("vlbi_delay", "vlbi_dd"),
-}
-
-
-def get_observation_metadata(sas_id_target):
-    from flocs_lta.lta_search import ObservationStager
-
-    lookup = ObservationStager(get_surls=False)
-    try:
-        lookup.find_observation_by_sasid("ALL", sas_id_target)
-    except SystemExit as error:
-        raise LookupError(f"No LTA metadata found for target {sas_id_target}.") from error
-    observation = lookup.target
-    date = observation.startTime
-    duration = observation.duration
-    values = {
-        "project_code": str(lookup.project) if lookup.project is not None else None,
-        "observation_date": date.isoformat() if date and date.year > 1 else None,
-        "integration_hours": duration / 3600
-        if duration is not None and math.isfinite(duration) and duration > 0 else None,
-    }
-    for column, attribute in (
-        ("nr_core", "nrStationsCore"),
-        ("nr_remote", "nrStationsRemote"),
-        ("nr_international", "nrStationsInternational"),
-    ):
-        count = getattr(observation, attribute, None)
-        values[column] = count if (
-            count is not None and math.isfinite(count) and count >= 0 and int(count) == count
-        ) else None
-    return values
 
 
 PIPELINES = Literal[
@@ -211,55 +166,56 @@ def add_field(
     pipelines: Annotated[
         str, Parameter(help="Pipelines this field needs to be processed with.")
     ] = "",
-    intent: Annotated[
-        Optional[Literal["PILOT-widefield", "PILOT-single-target"]],
-        Parameter(help="Workflow to register with its component pipelines."),
-    ] = None,
-    fetch_metadata: Annotated[
-        bool, Parameter(help="Read observation metadata from the LTA at registration.")
-    ] = False,
 ):
-    if len(sas_id_calibrators) not in (1, 2):
-        raise ValueError("Provide one or two calibrator SAS IDs.")
-    components = tuple(part.strip().lower() for part in pipelines.split(",")) if pipelines else None
-    if components is not None and any(part not in PIPELINE_CHECKPOINTS for part in components):
-        raise ValueError("Provide valid comma-separated component pipeline names.")
-    if intent is not None:
-        expected = INTENT_PIPELINES[intent]
-        if components is not None and set(components) != set(expected):
-            raise ValueError("The component pipelines do not match the selected workflow.")
-        components = expected
-    table = '"' + table_name.replace('"', '""') + '"'
-    values = dict(target_name=field_name, sas_id_target=sas_id_target)
-    values.update(zip(("sas_id_calibrator1", "sas_id_calibrator2"), sas_id_calibrators))
-    with sqlite3.connect(dbname) as database:
-        columns = {row[1] for row in database.execute(f"PRAGMA table_info({table})")}
-        if components is not None:
-            required = {f"status_{step}" for part in components for step in PIPELINE_CHECKPOINTS[part]}
-            if not required.issubset(columns):
-                raise ValueError("The table lacks checkpoint columns for the selected pipelines.")
-            values["pipelines"] = ",".join(components)
-            if intent is None:
-                intent = next((name for name, parts in INTENT_PIPELINES.items()
-                               if set(parts) == set(components)), None)
-        if intent is not None:
-            if intent == "PILOT-single-target" and "status_ddf" in columns:
-                raise ValueError("Single-target processing requires a table without DDF columns.")
-            values["intent"] = intent
-        if fetch_metadata:
-            values.update(get_observation_metadata(sas_id_target))
-        values["last_updated_at"] = datetime.now(timezone.utc).isoformat()
-        placeholders = ", ".join("?" for _ in values)
-        print(f"Adding field {field_name} to {table_name} in {dbname}")
-        database.execute(f"INSERT INTO {table} ({', '.join(values)}) VALUES ({placeholders})", list(values.values()))
-        if components is None:
-            registered = database.execute(
-                f"SELECT pipelines FROM {table} WHERE sas_id_target=?", (sas_id_target,)
-            ).fetchone()[0]
-            selected = {part.strip().lower() for part in (registered or "").split(",")}
-            inferred = next((name for name, parts in INTENT_PIPELINES.items() if set(parts) == selected), None)
-            if inferred is not None:
-                database.execute(f"UPDATE {table} SET intent=? WHERE sas_id_target=?", (inferred, sas_id_target))
+    from flocs_lta.lta_search import ObservationStager
+
+    lookup = ObservationStager(get_surls=False)
+    try:
+        lookup.find_observation_by_sasid("ALL", sas_id_target)
+    except SystemExit as error:
+        raise LookupError(f"No LTA metadata found for target {sas_id_target}.") from error
+    observation = lookup.target
+    date = observation.startTime
+    duration = observation.duration
+    metadata = {
+        "project_code": str(lookup.project) if lookup.project is not None else None,
+        "observation_date": date.isoformat() if date and date.year > 1 else None,
+        "integration_hours": duration / 3600
+        if duration is not None and math.isfinite(duration) and duration > 0 else None,
+    }
+    for column, attribute in (
+        ("nr_core", "nrStationsCore"),
+        ("nr_remote", "nrStationsRemote"),
+        ("nr_international", "nrStationsInternational"),
+    ):
+        count = getattr(observation, attribute, None)
+        metadata[column] = count if (
+            count is not None and math.isfinite(count) and count >= 0 and int(count) == count
+        ) else None
+    metadata["last_updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    dbstr = f"insert into {table_name} (target_name"
+    if len(sas_id_calibrators) == 1:
+        dbstr += ", sas_id_calibrator1"
+    if len(sas_id_calibrators) == 2:
+        dbstr += ", sas_id_calibrator1, sas_id_calibrator2"
+    dbstr += f", sas_id_target, {', '.join(metadata)}) values ('{field_name}', "
+    if len(sas_id_calibrators) == 1:
+        dbstr += f"'{sas_id_calibrators[0]}', "
+    if len(sas_id_calibrators) == 2:
+        dbstr += f"'{sas_id_calibrators[0]}', '{sas_id_calibrators[1]}', "
+    dbstr += f"'{sas_id_target}', "
+    dbstr += ", ".join(
+        "NULL" if value is None else "'" + str(value).replace("'", "''") + "'"
+        for value in metadata.values()
+    ) + ")"
+
+    cmd = ["sqlite3", dbname, dbstr]
+    print(f"Adding field {field_name} to {table_name} via: {' '.join(cmd)}")
+
+    return_code = subprocess.run(cmd)
+    if not return_code:
+        raise RuntimeError(f"Failed to update table {table_name} in database {dbname}.")
 
 
 @app.command()
