@@ -167,6 +167,7 @@ def add_field(
     ] = "",
 ):
     from flocs_lta.lta_search import ObservationStager
+    from awlofar.main.aweimports import CorrelatedDataProduct
 
     lookup = ObservationStager(get_surls=False)
     try:
@@ -174,10 +175,30 @@ def add_field(
     except SystemExit as error:
         raise LookupError(f"No LTA metadata found for target {sas_id_target}.") from error
     observation = lookup.target
+    products = CorrelatedDataProduct.isValid == 1
+    if str(lookup.obsid) == str(sas_id_target):
+        products &= CorrelatedDataProduct.observation.observationId == lookup.obsid
+    else:
+        products &= CorrelatedDataProduct.pipeline.observationId == sas_id_target
+    products &= CorrelatedDataProduct.minimumFrequency >= 120
+    products &= CorrelatedDataProduct.maximumFrequency <= 168
+    products = list(products)
+    pointings = list(observation.subArrayPointings)
+    named = [pointing for pointing in pointings if pointing.targetName == field_name]
+    if named:
+        pointings = named
+    sapids = {product.subArrayPointing.subArrayPointingIdentifier for product in products}
+    pointings = [pointing for pointing in pointings if pointing.subArrayPointingIdentifier in sapids]
+    if len(pointings) != 1:
+        raise ValueError(f"Cannot identify a unique in-band beam for {field_name}, target {sas_id_target}.")
+    pointing = pointings[0]
+    coordinates = pointing.pointing
     date = observation.startTime
     duration = observation.duration
     metadata = {
         "project_code": lookup.project,
+        "pointing_ra_deg": coordinates.rightAscension if coordinates is not None else None,
+        "pointing_dec_deg": coordinates.declination if coordinates is not None else None,
         "observation_date": date.isoformat() if date is not None else None,
         "integration_hours": duration / 3600 if duration is not None else None,
         "nr_core": observation.nrStationsCore,
