@@ -95,7 +95,47 @@ def create_database(
     if "vlbi-delay-single-target" in pipelines:
         dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
         dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
-    dbstr += ");"
+    # Keep the current DAGs' checkpoint columns during the schema transition.
+    dbstr += """,
+        project_code TEXT,
+        observation_date TEXT,
+        pointing_ra_deg REAL,
+        pointing_dec_deg REAL,
+        integration_hours REAL,
+        number_subbands_requested INTEGER,
+        number_subbands_downloaded INTEGER,
+        freq_min_mhz REAL,
+        freq_max_mhz REAL,
+        frequency_resolution_hz REAL,
+        time_resolution_s REAL,
+        nr_core INTEGER,
+        nr_remote INTEGER,
+        nr_international INTEGER,
+        elevation_mean_deg REAL,
+        selected_delay_calibrator TEXT,
+        intent TEXT,
+        processing_step TEXT NOT NULL DEFAULT 'pending',
+        processing_start_time TEXT,
+        processing_end_time TEXT,
+        processing_cluster TEXT,
+        processing_user TEXT,
+        processing_host TEXT,
+        workflow_run_id TEXT,
+        last_updated_at TEXT,
+        input_location TEXT,
+        work_directory TEXT,
+        output_location TEXT,
+        last_error TEXT,
+        delay_calibrator_phase_score REAL,
+        delay_calibrator_amp_score REAL,
+        n_dd_calibrators INTEGER,
+        dd_calibrator_phase_score_min REAL,
+        dd_calibrator_phase_score_max REAL,
+        dd_calibrator_phase_score_median REAL,
+        dd_calibrator_amp_score_min REAL,
+        dd_calibrator_amp_score_max REAL,
+        dd_calibrator_amp_score_median REAL
+    );"""
 
     cmd = ["sqlite3", dbname, dbstr]
     print(f"Creating table via: {' '.join(cmd)}")

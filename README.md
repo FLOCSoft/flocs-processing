@@ -16,6 +16,8 @@ The expected naming directory structure for input data is `<data folder>/<field 
 ## Database setup
 A database for processing is created via `flocs-processing create-database`. This will create an empty database with the necessary columns. Datasets to process can be added via `flocs-processing add-field` or existing fields manipulated via `flocs-processing update-field-status` or `flocs-processing update-pipeline-status`.
 
+New databases also reserve columns for observation metadata, workflow bookkeeping and calibration summaries. Existing checkpoint columns and status defaults are retained, and the current workflows continue to use them. `create-database` creates fresh tables only; it does not migrate existing databases.
+
 ## Processing data
 ### Automatic setup via flocs
 To start processing data, Airflow needs to be running. This can be setup automatically via `flocs-processing deploy-airflow`. See its help for options.
