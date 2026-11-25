@@ -95,7 +95,6 @@ def create_database(
     if "vlbi-delay-single-target" in pipelines:
         dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
         dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
-    # Keep the current DAGs' checkpoint columns during the schema transition.
     dbstr += """,
         project_code TEXT,
         observation_date TEXT,
