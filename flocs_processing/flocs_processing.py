@@ -243,27 +243,26 @@ def add_field(
             if not required.issubset(columns):
                 raise ValueError("The table lacks checkpoint columns for the selected pipelines.")
             values["pipelines"] = ",".join(components)
-            if intent is None and "intent" in columns:
+            if intent is None:
                 intent = next((name for name, parts in INTENT_PIPELINES.items()
                                if set(parts) == set(components)), None)
         if intent is not None:
             if intent == "PILOT-single-target" and "status_ddf" in columns:
                 raise ValueError("Single-target processing requires a table without DDF columns.")
             values["intent"] = intent
-        if "last_updated_at" in columns:
-            values["last_updated_at"] = datetime.now(timezone.utc).isoformat()
+        values["last_updated_at"] = datetime.now(timezone.utc).isoformat()
         required = values.keys() | (
             OBSERVATION_METADATA_COLUMNS | {"last_updated_at"} if fetch_metadata else set()
         )
         missing = required - columns
         if missing:
-            raise ValueError(f"The table needs a schema upgrade for columns: {', '.join(sorted(missing))}.")
+            raise ValueError(f"The table lacks required columns: {', '.join(sorted(missing))}.")
         if fetch_metadata:
             values.update(get_observation_metadata(sas_id_target))
             values["last_updated_at"] = datetime.now(timezone.utc).isoformat()
         placeholders = ", ".join("?" for _ in values)
         database.execute(f"INSERT INTO {table} ({', '.join(values)}) VALUES ({placeholders})", list(values.values()))
-        if components is None and "intent" in columns:
+        if components is None:
             registered = database.execute(
                 f"SELECT pipelines FROM {table} WHERE sas_id_target=?", (sas_id_target,)
             ).fetchone()[0]
@@ -272,36 +271,6 @@ def add_field(
             if inferred is not None:
                 database.execute(f"UPDATE {table} SET intent=? WHERE sas_id_target=?", (inferred, sas_id_target))
     print(f"Added field {field_name} to {table_name} in {dbname}")
-
-
-@app.command()
-def update_field_metadata(
-    field_name: Annotated[str, Parameter(help="Registered field name.")],
-    sas_id_target: Annotated[str, Parameter(help="Registered target SAS ID.")],
-    dbname: Annotated[str, Parameter(help="Processing SQLite database.")],
-    table_name: Annotated[str, Parameter(help="Processing table.")] = "processing_flocs",
-):
-    table = '"' + table_name.replace('"', '""') + '"'
-    with sqlite3.connect(dbname) as database:
-        columns = {row[1] for row in database.execute(f"PRAGMA table_info({table})")}
-        missing = (OBSERVATION_METADATA_COLUMNS | {"last_updated_at"}) - columns
-        if missing:
-            raise ValueError(f"The table needs a schema upgrade for columns: {', '.join(sorted(missing))}.")
-        if database.execute(
-            f"SELECT 1 FROM {table} WHERE target_name=? AND sas_id_target=?", (field_name, sas_id_target)
-        ).fetchone() is None:
-            raise LookupError(f"Field {field_name}, target {sas_id_target} is not registered.")
-        values = {key: value for key, value in get_observation_metadata(sas_id_target).items()
-                  if value is not None}
-        values["last_updated_at"] = datetime.now(timezone.utc).isoformat()
-        cursor = database.execute(
-            f"UPDATE {table} SET " + ", ".join(f"{key}=?" for key in values)
-            + " WHERE target_name=? AND sas_id_target=?",
-            [*values.values(), field_name, sas_id_target],
-        )
-        if cursor.rowcount != 1:
-            raise LookupError(f"Field {field_name}, target {sas_id_target} changed during metadata lookup.")
-    print(f"Updated metadata for {field_name}, target {sas_id_target}")
 
 
 @app.command()

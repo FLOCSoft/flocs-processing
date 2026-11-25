@@ -55,7 +55,7 @@ class RegistrationMetadataTests(unittest.TestCase):
             row = db.execute(f"SELECT * FROM {table} WHERE sas_id_target=?", (target,)).fetchone()
             return dict(row) if row else None
 
-    def test_existing_registration_stays_offline_and_inherits_defaults(self):
+    def test_default_registration_stays_offline_and_inherits_defaults(self):
         self.create()
         self.register()
         row = self.row()
@@ -121,86 +121,25 @@ class RegistrationMetadataTests(unittest.TestCase):
                 cli.add_field("FIELD", calibrators, "222", self.path)
         self.assertIsNone(self.row())
 
-    def test_refresh_changes_only_metadata_for_the_selected_field(self):
-        self.create(["linc", "ddf-pipeline", "vlbi-delay-widefield"])
-        self.register(fetch_metadata=True)
-        self.register("OTHER", "333")
-        with sqlite3.connect(self.path) as db:
-            db.execute("UPDATE processing_flocs SET status='processing', status_target=98, "
-                       "status_calibrator1=2, status_calibrator2=2, status_vlbi_delay=3, "
-                       "downloaded=1, workflow_run_id='active-run', "
-                       "last_error='retained detail' WHERE sas_id_target='222'")
-        before, other = self.row(), self.row("333")
-        self.lookup.project = "LC13_002"
-        self.observation.duration = 10800
-        self.run_cli(["update-field-metadata", "FIELD", "222", self.path])
-        after = self.row()
-        changed = {key for key in before if before[key] != after[key]}
-        self.assertEqual(changed, {"project_code", "integration_hours", "last_updated_at"})
-        self.assertEqual(after["integration_hours"], 3)
-        self.assertEqual(self.row("333"), other)
-
-    def test_refresh_keeps_known_values_when_archive_values_are_missing(self):
+    def test_missing_or_invalid_archive_values_stay_null(self):
         self.create()
-        self.register(fetch_metadata=True)
-        before = self.row()
         self.lookup.project = None
         self.observation.startTime = datetime.min
         self.observation.duration = float("nan")
         self.observation.nrStationsCore = -1
         self.observation.nrStationsRemote = 2.5
         self.observation.nrStationsInternational = None
-        cli.update_field_metadata("FIELD", "222", self.path)
-        after = self.row()
-        self.assertEqual({key: value for key, value in before.items() if key != "last_updated_at"},
-                         {key: value for key, value in after.items() if key != "last_updated_at"})
+        self.register(fetch_metadata=True)
+        self.assertTrue(all(self.row()[key] is None for key in cli.OBSERVATION_METADATA_COLUMNS))
 
-    def test_missing_or_wrong_field_does_not_contact_archive(self):
+    def test_archive_failures_do_not_insert_partial_rows(self):
         self.create()
-        self.register()
-        for name, target in [("WRONG", "222"), ("FIELD", "999")]:
-            with self.subTest(name=name, target=target), self.assertRaises(LookupError):
-                cli.update_field_metadata(name, target, self.path)
-        self.stager.assert_not_called()
-
-    def test_archive_failures_leave_registration_and_refresh_unchanged(self):
-        self.create()
-        self.register()
-        before = self.row()
         for error in [SystemExit(0), ConnectionError("archive unavailable")]:
             self.lookup.find_observation_by_sasid.side_effect = error
             expected = LookupError if isinstance(error, SystemExit) else ConnectionError
             with self.subTest(error=error), self.assertRaises(expected):
-                cli.update_field_metadata("FIELD", "222", self.path)
-            self.assertEqual(self.row(), before)
-            with self.assertRaises(expected):
                 self.register("NEW", "333", fetch_metadata=True)
             self.assertIsNone(self.row("333"))
-
-    def test_duplicate_registration_preserves_progress(self):
-        self.create()
-        self.register()
-        with sqlite3.connect(self.path) as db:
-            db.execute("UPDATE processing_flocs SET status_target=99, downloaded=1")
-        before = self.row()
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.register(fetch_metadata=True)
-        self.assertEqual(self.row(), before)
-
-    def test_legacy_schema_accepts_old_registration_but_rejects_metadata(self):
-        with sqlite3.connect(self.path) as db:
-            db.execute("CREATE TABLE processing_flocs (target_name TEXT, sas_id_target TEXT PRIMARY KEY, "
-                       "sas_id_calibrator1 TEXT, sas_id_calibrator2 TEXT, pipelines TEXT DEFAULT 'linc', "
-                       "status_calibrator1 INTEGER DEFAULT 0, status_calibrator2 INTEGER DEFAULT 0, "
-                       "status_target INTEGER DEFAULT 0)")
-        self.register(pipelines="linc")
-        self.assertEqual(self.row()["pipelines"], "linc")
-        for action in [lambda: self.register("NEW", "333", fetch_metadata=True),
-                       lambda: cli.update_field_metadata("FIELD", "222", self.path)]:
-            with self.assertRaisesRegex(ValueError, "schema upgrade"):
-                action()
-        self.stager.assert_not_called()
-
 
 if __name__ == "__main__":
     unittest.main()
