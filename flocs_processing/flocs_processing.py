@@ -213,7 +213,7 @@ def add_field(
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
     pipelines: Annotated[
-        str, Parameter(help="Comma-separated component pipelines for this field.")
+        str, Parameter(help="Pipelines this field needs to be processed with.")
     ] = "",
     intent: Annotated[
         Optional[Literal["PILOT-widefield", "PILOT-single-target"]],
