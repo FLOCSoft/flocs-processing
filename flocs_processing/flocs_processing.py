@@ -192,6 +192,10 @@ def add_field(
     if len(pointings) != 1:
         raise ValueError(f"Cannot identify a unique in-band beam for {field_name}, target {sas_id_target}.")
     pointing = pointings[0]
+    products = [product for product in products
+                if product.subArrayPointing.subArrayPointingIdentifier == pointing.subArrayPointingIdentifier]
+    widths = {product.channelWidth for product in products}
+    intervals = {product.integrationInterval for product in products}
     coordinates = pointing.pointing
     date = observation.startTime
     duration = observation.duration
@@ -199,6 +203,11 @@ def add_field(
         "project_code": lookup.project,
         "pointing_ra_deg": coordinates.rightAscension if coordinates is not None else None,
         "pointing_dec_deg": coordinates.declination if coordinates is not None else None,
+        "number_subbands_requested": len({product.subband for product in products}),
+        "freq_min_mhz": 120,
+        "freq_max_mhz": 168,
+        "frequency_resolution_hz": widths.pop() if len(widths) == 1 else None,
+        "time_resolution_s": intervals.pop() if len(intervals) == 1 else None,
         "observation_date": date.isoformat() if date is not None else None,
         "integration_hours": duration / 3600 if duration is not None else None,
         "nr_core": observation.nrStationsCore,
