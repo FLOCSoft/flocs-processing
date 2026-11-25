@@ -180,8 +180,6 @@ def add_field(
         products &= CorrelatedDataProduct.observation.observationId == lookup.obsid
     else:
         products &= CorrelatedDataProduct.pipeline.observationId == sas_id_target
-    products &= CorrelatedDataProduct.minimumFrequency >= 120
-    products &= CorrelatedDataProduct.maximumFrequency <= 168
     products = list(products)
     pointings = list(observation.subArrayPointings)
     named = [pointing for pointing in pointings if pointing.targetName == field_name]
@@ -190,7 +188,7 @@ def add_field(
     sapids = {product.subArrayPointing.subArrayPointingIdentifier for product in products}
     pointings = [pointing for pointing in pointings if pointing.subArrayPointingIdentifier in sapids]
     if len(pointings) != 1:
-        raise ValueError(f"Cannot identify a unique in-band beam for {field_name}, target {sas_id_target}.")
+        raise ValueError(f"Cannot identify a unique beam for {field_name}, target {sas_id_target}.")
     pointing = pointings[0]
     products = [product for product in products
                 if product.subArrayPointing.subArrayPointingIdentifier == pointing.subArrayPointingIdentifier]
@@ -204,8 +202,8 @@ def add_field(
         "pointing_ra_deg": coordinates.rightAscension if coordinates is not None else None,
         "pointing_dec_deg": coordinates.declination if coordinates is not None else None,
         "number_subbands_requested": len({product.subband for product in products}),
-        "freq_min_mhz": 120,
-        "freq_max_mhz": 168,
+        "freq_min_mhz": min(product.minimumFrequency for product in products),
+        "freq_max_mhz": max(product.maximumFrequency for product in products),
         "frequency_resolution_hz": widths.pop() if len(widths) == 1 else None,
         "time_resolution_s": intervals.pop() if len(intervals) == 1 else None,
         "observation_date": date.isoformat() if date is not None else None,
