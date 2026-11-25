@@ -180,8 +180,6 @@ def add_field(
         products &= CorrelatedDataProduct.observation.observationId == lookup.obsid
     else:
         products &= CorrelatedDataProduct.pipeline.observationId == sas_id_target
-    products &= CorrelatedDataProduct.minimumFrequency >= 120
-    products &= CorrelatedDataProduct.maximumFrequency <= 168
     products = list(products)
     pointings = list(observation.subArrayPointings)
     named = [pointing for pointing in pointings if pointing.targetName == field_name]
@@ -190,7 +188,7 @@ def add_field(
     sapids = {product.subArrayPointing.subArrayPointingIdentifier for product in products}
     pointings = [pointing for pointing in pointings if pointing.subArrayPointingIdentifier in sapids]
     if len(pointings) != 1:
-        raise ValueError(f"Cannot identify a unique in-band beam for {field_name}, target {sas_id_target}.")
+        raise ValueError(f"Cannot identify a unique beam for {field_name}, target {sas_id_target}.")
     pointing = pointings[0]
     coordinates = pointing.pointing
     date = observation.startTime
