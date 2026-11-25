@@ -6,9 +6,21 @@ from datetime import datetime, timezone
 from enum import Enum
 import cyclopts
 import functools
+import oracledb
 import subprocess
 import structlog
 from typing import Annotated, Literal, Optional, get_args
+
+try:
+    from flocs_lta.lta_search import ObservationStager
+    from awlofar.main.aweimports import CorrelatedDataProduct
+except oracledb.OperationalError as error:
+    (error_obj,) = error.args
+    if error_obj.full_code != "DPY-6005":
+        raise
+    _lta_connection_error = error
+else:
+    _lta_connection_error = None
 
 app = cyclopts.App()
 
@@ -166,8 +178,8 @@ def add_field(
         str, Parameter(help="Pipelines this field needs to be processed with.")
     ] = "",
 ):
-    from flocs_lta.lta_search import ObservationStager
-    from awlofar.main.aweimports import CorrelatedDataProduct
+    if _lta_connection_error is not None:
+        raise _lta_connection_error
 
     lookup = ObservationStager(get_surls=False)
     try:
