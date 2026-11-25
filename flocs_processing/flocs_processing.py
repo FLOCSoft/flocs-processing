@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from enum import Enum
 import cyclopts
 import functools
-import math
 import subprocess
 import structlog
 from typing import Annotated, Literal, Optional, get_args
@@ -178,21 +177,14 @@ def add_field(
     date = observation.startTime
     duration = observation.duration
     metadata = {
-        "project_code": str(lookup.project) if lookup.project is not None else None,
-        "observation_date": date.isoformat() if date and date.year > 1 else None,
-        "integration_hours": duration / 3600
-        if duration is not None and math.isfinite(duration) and duration > 0 else None,
+        "project_code": lookup.project,
+        "observation_date": date.isoformat() if date is not None else None,
+        "integration_hours": duration / 3600 if duration is not None else None,
+        "nr_core": observation.nrStationsCore,
+        "nr_remote": observation.nrStationsRemote,
+        "nr_international": observation.nrStationsInternational,
+        "last_updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    for column, attribute in (
-        ("nr_core", "nrStationsCore"),
-        ("nr_remote", "nrStationsRemote"),
-        ("nr_international", "nrStationsInternational"),
-    ):
-        count = getattr(observation, attribute, None)
-        metadata[column] = count if (
-            count is not None and math.isfinite(count) and count >= 0 and int(count) == count
-        ) else None
-    metadata["last_updated_at"] = datetime.now(timezone.utc).isoformat()
 
     dbstr = f"insert into {table_name} (target_name"
     if len(sas_id_calibrators) == 1:
