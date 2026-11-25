@@ -33,11 +33,11 @@ CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
 def pilot_single_target_dispatcher():
     @task.short_circuit
     def check_fields():
-        return bool(CURRENT_DB.get_db_columns(intent="single-target"))
+        return bool(CURRENT_DB.get_db_columns(intent="vlbi-single-target"))
 
     @task
     def get_unprocessed_field():
-        for dbrow in CURRENT_DB.get_db_columns(intent="single-target"):
+        for dbrow in CURRENT_DB.get_db_columns(intent="vlbi-single-target"):
             field = dict(dbrow)
             if field["status"] == FIELD_STATUS.downloading.value:
                 continue
