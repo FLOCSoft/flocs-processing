@@ -54,18 +54,17 @@ class FlocsDB:
             db.row_factory = sqlite3.Row
             cursor = db.cursor()
             columns = "*"
-            if intent != "%":
-                intent = f"%{intent.removeprefix('vlbi-')}%"
+            intent_filter = "" if intent == "%" else f" and intent=='{intent}'"
             if obsid:
                 field = cursor.execute(
                     f"select {columns} from {self.TABLE_NAME} where sas_id_target=='{obsid}'"
-                    + (f" and coalesce(intent, pipelines) like '{intent}'")
+                    + intent_filter
                     + " order by priority desc"
                 ).fetchall()
             else:
                 field = cursor.execute(
                     f"select {columns} from {self.TABLE_NAME} where (status=='not started' or status=='downloaded')"
-                    + (f" and coalesce(intent, pipelines) like '{intent}'")
+                    + intent_filter
                     + " order by priority desc"
                 ).fetchall()
             print(field)
