@@ -33,11 +33,11 @@ CURRENT_DB = FlocsDB(DATABASE, TABLE_NAME)
 def ilotss_dispatcher():
     @task.short_circuit
     def check_fields():
-        return bool(CURRENT_DB.get_db_columns(intent="widefield"))
+        return bool(CURRENT_DB.get_db_columns(intent="vlbi-widefield"))
 
     @task
     def get_unprocessed_field():
-        for dbrow in CURRENT_DB.get_db_columns(intent="widefield"):
+        for dbrow in CURRENT_DB.get_db_columns(intent="vlbi-widefield"):
             field = dict(dbrow)
             if field["status"] == FIELD_STATUS.downloading.value:
                 continue

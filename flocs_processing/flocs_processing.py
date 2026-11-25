@@ -171,6 +171,10 @@ def add_field(
     dbname: Annotated[
         str, Parameter(help="Sqlite3 database from which processing will be done.")
     ],
+    intent: Annotated[
+        Literal["vlbi-widefield", "vlbi-single-target"],
+        Parameter(help="Workflow this field needs to be processed with."),
+    ],
     table_name: Annotated[
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
@@ -178,6 +182,11 @@ def add_field(
         str, Parameter(help="Pipelines this field needs to be processed with.")
     ] = "",
 ):
+    if not pipelines and intent == "vlbi-widefield":
+        pipelines = "linc,ddf-pipeline,vlbi-delay-widefield"
+    elif not pipelines and intent == "vlbi-single-target":
+        pipelines = "linc,vlbi-delay-single-target"
+
     if _lta_connection_error is not None:
         raise _lta_connection_error
 
@@ -210,6 +219,8 @@ def add_field(
     date = observation.startTime
     duration = observation.duration
     metadata = {
+        "intent": intent,
+        "pipelines": pipelines,
         "project_code": lookup.project,
         "pointing_ra_deg": coordinates.rightAscension if coordinates is not None else None,
         "pointing_dec_deg": coordinates.declination if coordinates is not None else None,
