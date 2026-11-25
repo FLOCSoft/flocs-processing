@@ -30,10 +30,6 @@ PIPELINE_CHECKPOINTS = {
     ),
     "vlbi-delay-single-target": ("vlbi_delay", "vlbi_dd"),
 }
-OBSERVATION_METADATA_COLUMNS = {
-    "project_code", "observation_date", "integration_hours",
-    "nr_core", "nr_remote", "nr_international",
-}
 
 
 def get_observation_metadata(sas_id_target):
@@ -250,17 +246,11 @@ def add_field(
             if intent == "PILOT-single-target" and "status_ddf" in columns:
                 raise ValueError("Single-target processing requires a table without DDF columns.")
             values["intent"] = intent
-        values["last_updated_at"] = datetime.now(timezone.utc).isoformat()
-        required = values.keys() | (
-            OBSERVATION_METADATA_COLUMNS | {"last_updated_at"} if fetch_metadata else set()
-        )
-        missing = required - columns
-        if missing:
-            raise ValueError(f"The table lacks required columns: {', '.join(sorted(missing))}.")
         if fetch_metadata:
             values.update(get_observation_metadata(sas_id_target))
-            values["last_updated_at"] = datetime.now(timezone.utc).isoformat()
+        values["last_updated_at"] = datetime.now(timezone.utc).isoformat()
         placeholders = ", ".join("?" for _ in values)
+        print(f"Adding field {field_name} to {table_name} in {dbname}")
         database.execute(f"INSERT INTO {table} ({', '.join(values)}) VALUES ({placeholders})", list(values.values()))
         if components is None:
             registered = database.execute(
@@ -270,7 +260,6 @@ def add_field(
             inferred = next((name for name, parts in INTENT_PIPELINES.items() if set(parts) == selected), None)
             if inferred is not None:
                 database.execute(f"UPDATE {table} SET intent=? WHERE sas_id_target=?", (inferred, sas_id_target))
-    print(f"Added field {field_name} to {table_name} in {dbname}")
 
 
 @app.command()
