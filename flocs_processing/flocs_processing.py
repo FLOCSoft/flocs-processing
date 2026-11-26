@@ -86,28 +86,17 @@ def create_database(
     table_name: Annotated[
         str, Parameter(help="Database table that will be processed.")
     ] = "processing_flocs",
-    pipelines: Annotated[list[str], Parameter(help="", consume_multiple=True)] = [
-        "linc"
-    ],
 ):
-    pipeline_str = ",".join(pipelines)
-    pipelines = list(map(str.lower, pipelines))
-    dbstr = f"create table {table_name}(target_name text default NULL, pipelines text default '{pipeline_str}', priority int default 0, status text default '{FIELD_STATUS.nothing.value}', downloaded bit default 0"
+    dbstr = f"create table {table_name}(target_name text default NULL, pipelines text default NULL, priority int default 0, status text default '{FIELD_STATUS.nothing.value}', downloaded bit default 0"
 
-    if "linc" in pipelines:
-        dbstr += f", sas_id_calibrator1 text default NULL, sas_id_calibrator2 text default NULL, sas_id_calibrator_final text default NULL, sas_id_target text primary key default NULL, status_calibrator1 smallint default {PIPELINE_STATUS.nothing.value}, status_calibrator2 smallint default {PIPELINE_STATUS.nothing.value}, status_target smallint default {PIPELINE_STATUS.nothing.value}"
-    if "ddf-pipeline" in pipelines:
-        dbstr += f", status_ddf smallint default {PIPELINE_STATUS.nothing.value}"
-    if "vlbi-delay-widefield" in pipelines:
-        dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_ddf_subtract smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_intermediate_img smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_facet_subtract smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_facet_imaging smallint default {PIPELINE_STATUS.nothing.value}"
-    if "vlbi-delay-single-target" in pipelines:
-        dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
-        dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
+    dbstr += f", sas_id_calibrator1 text default NULL, sas_id_calibrator2 text default NULL, sas_id_calibrator_final text default NULL, sas_id_target text primary key default NULL, status_calibrator1 smallint default {PIPELINE_STATUS.nothing.value}, status_calibrator2 smallint default {PIPELINE_STATUS.nothing.value}, status_target smallint default {PIPELINE_STATUS.nothing.value}"
+    dbstr += f", status_ddf smallint default {PIPELINE_STATUS.nothing.value}"
+    dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
+    dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
+    dbstr += f", status_vlbi_ddf_subtract smallint default {PIPELINE_STATUS.nothing.value}"
+    dbstr += f", status_vlbi_intermediate_img smallint default {PIPELINE_STATUS.nothing.value}"
+    dbstr += f", status_vlbi_facet_subtract smallint default {PIPELINE_STATUS.nothing.value}"
+    dbstr += f", status_vlbi_facet_imaging smallint default {PIPELINE_STATUS.nothing.value}"
     dbstr += """,
         project_code TEXT,
         observation_date TEXT,
