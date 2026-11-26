@@ -682,8 +682,8 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
-    if "status_ddf" not in field:
-        print("Not a widefield imaging run, checking LINC + delay calibration.")
+    if field["intent"] == "vlbi-single-target":
+        print("vlbi-single-target imaging run, checking LINC + delay calibration.")
         target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
         target_ms_path = target_path / "results_LINC_target" / "results"
         print(f"Using LINC target run: {target_path}")
@@ -705,7 +705,7 @@ def run_pilot_ddcal_cwltool(field, db: FlocsDB, mode="widefield"):
         elif mode == "single_target":
             cmd = f"flocs-run vlbi dd-calibration --runner cwltool --scheduler slurm --slurm-cores 32 --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --max-rejected-fraction 1.0 --keep-close-sources --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat {target_ms_path}"
     else:
-        print("Widefield imaging run, checking subtraction output.")
+        print("vlbi-widefield imaging run, checking subtraction output.")
         target_path = get_most_recent_run(
             outdir, field["sas_id_target"], "VLBI_process-ddf"
         )
@@ -786,8 +786,8 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
         os.makedirs(outdir, exist_ok=True)
     if not os.path.isdir(logsdir):
         os.makedirs(logsdir, exist_ok=True)
-    if "status_ddf" not in field:
-        print("Not a widefield imaging run, checking LINC + delay calibration.")
+    if field["intent"] == "vlbi-single-target":
+        print("vlbi-single-target imaging run, checking LINC + delay calibration.")
         target_path = get_most_recent_run(outdir, field["sas_id_target"], "LINC_target")
         target_ms_path = target_path / "results_LINC_target" / "results"
         print(f"Using LINC target run: {target_path}")
@@ -809,7 +809,7 @@ def run_pilot_ddcal_toil(field, db: FlocsDB, mode: str = "widefield"):
         elif mode == "single_target":
             cmd = f"flocs-run vlbi dd-calibration --runner toil --scheduler slurm --slurm-time 24:00:00 --slurm-account {SLURM_ACCOUNT} --slurm-queue {SLURM_QUEUE} --rundir {PROCESSING_DIR} --outdir {outdir} --delay-solset {sols} --max-rejected-fraction 1.0 --peak-flux-cut 0.0 --keep-close-sources --source-catalogue {source_cat} --model-cache {NN_MODEL_CACHE} --ms-suffix .dp3concat {target_ms_path}"
     else:
-        print("Widefield imaging run, checking subtraction output.")
+        print("vlbi-widefield imaging run, checking subtraction output.")
         target_path = get_most_recent_run(
             outdir, field["sas_id_target"], "VLBI_process-ddf"
         )
