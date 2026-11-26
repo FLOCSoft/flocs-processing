@@ -2,12 +2,25 @@
 from .db_utils import FlocsDB
 from .processors import FlocsAirflowProcessor
 from cyclopts import Parameter
+from datetime import datetime, timezone
 from enum import Enum
 import cyclopts
 import functools
+import oracledb
 import subprocess
 import structlog
 from typing import Annotated, Literal, Optional, get_args
+
+try:
+    from flocs_lta.lta_search import ObservationStager
+    from awlofar.main.aweimports import CorrelatedDataProduct
+except oracledb.OperationalError as error:
+    (error_obj,) = error.args
+    if error_obj.full_code != "DPY-6005":
+        raise
+    _lta_connection_error = error
+else:
+    _lta_connection_error = None
 
 app = cyclopts.App()
 
@@ -95,7 +108,46 @@ def create_database(
     if "vlbi-delay-single-target" in pipelines:
         dbstr += f", status_vlbi_delay smallint default {PIPELINE_STATUS.nothing.value}"
         dbstr += f", status_vlbi_dd smallint default {PIPELINE_STATUS.nothing.value}"
-    dbstr += ");"
+    dbstr += """,
+        project_code TEXT,
+        observation_date TEXT,
+        pointing_ra_deg REAL,
+        pointing_dec_deg REAL,
+        integration_hours REAL,
+        number_subbands_requested INTEGER,
+        number_subbands_downloaded INTEGER,
+        freq_min_mhz REAL,
+        freq_max_mhz REAL,
+        frequency_resolution_hz REAL,
+        time_resolution_s REAL,
+        nr_core INTEGER,
+        nr_remote INTEGER,
+        nr_international INTEGER,
+        elevation_mean_deg REAL,
+        selected_delay_calibrator TEXT,
+        intent TEXT,
+        processing_step TEXT NOT NULL DEFAULT 'pending',
+        processing_start_time TEXT,
+        processing_end_time TEXT,
+        processing_cluster TEXT,
+        processing_user TEXT,
+        processing_host TEXT,
+        workflow_run_id TEXT,
+        last_updated_at TEXT,
+        input_location TEXT,
+        work_directory TEXT,
+        output_location TEXT,
+        last_error TEXT,
+        delay_calibrator_phase_score REAL,
+        delay_calibrator_amp_score REAL,
+        n_dd_calibrators INTEGER,
+        dd_calibrator_phase_score_min REAL,
+        dd_calibrator_phase_score_max REAL,
+        dd_calibrator_phase_score_median REAL,
+        dd_calibrator_amp_score_min REAL,
+        dd_calibrator_amp_score_max REAL,
+        dd_calibrator_amp_score_median REAL
+    );"""
 
     cmd = ["sqlite3", dbname, dbstr]
     print(f"Creating table via: {' '.join(cmd)}")
@@ -126,17 +178,69 @@ def add_field(
         str, Parameter(help="Pipelines this field needs to be processed with.")
     ] = "",
 ):
+    if _lta_connection_error is not None:
+        raise _lta_connection_error
+
+    lookup = ObservationStager(get_surls=False)
+    try:
+        lookup.find_observation_by_sasid("ALL", sas_id_target)
+    except SystemExit as error:
+        raise LookupError(f"No LTA metadata found for target {sas_id_target}.") from error
+    observation = lookup.target
+    products = CorrelatedDataProduct.isValid == 1
+    if str(lookup.obsid) == str(sas_id_target):
+        products &= CorrelatedDataProduct.observation.observationId == lookup.obsid
+    else:
+        products &= CorrelatedDataProduct.pipeline.observationId == sas_id_target
+    products = list(products)
+    pointings = list(observation.subArrayPointings)
+    named = [pointing for pointing in pointings if pointing.targetName == field_name]
+    if named:
+        pointings = named
+    sapids = {product.subArrayPointing.subArrayPointingIdentifier for product in products}
+    pointings = [pointing for pointing in pointings if pointing.subArrayPointingIdentifier in sapids]
+    if len(pointings) != 1:
+        raise ValueError(f"Cannot identify a unique beam for {field_name}, target {sas_id_target}.")
+    pointing = pointings[0]
+    products = [product for product in products
+                if product.subArrayPointing.subArrayPointingIdentifier == pointing.subArrayPointingIdentifier]
+    widths = {product.channelWidth for product in products}
+    intervals = {product.integrationInterval for product in products}
+    coordinates = pointing.pointing
+    date = observation.startTime
+    duration = observation.duration
+    metadata = {
+        "project_code": lookup.project,
+        "pointing_ra_deg": coordinates.rightAscension if coordinates is not None else None,
+        "pointing_dec_deg": coordinates.declination if coordinates is not None else None,
+        "number_subbands_requested": len({product.subband for product in products}),
+        "freq_min_mhz": min(product.minimumFrequency for product in products),
+        "freq_max_mhz": max(product.maximumFrequency for product in products),
+        "frequency_resolution_hz": widths.pop() if len(widths) == 1 else None,
+        "time_resolution_s": intervals.pop() if len(intervals) == 1 else None,
+        "observation_date": date.isoformat() if date is not None else None,
+        "integration_hours": duration / 3600 if duration is not None else None,
+        "nr_core": observation.nrStationsCore,
+        "nr_remote": observation.nrStationsRemote,
+        "nr_international": observation.nrStationsInternational,
+        "last_updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
     dbstr = f"insert into {table_name} (target_name"
     if len(sas_id_calibrators) == 1:
         dbstr += ", sas_id_calibrator1"
     if len(sas_id_calibrators) == 2:
         dbstr += ", sas_id_calibrator1, sas_id_calibrator2"
-    dbstr += f", sas_id_target) values ('{field_name}', "
+    dbstr += f", sas_id_target, {', '.join(metadata)}) values ('{field_name}', "
     if len(sas_id_calibrators) == 1:
         dbstr += f"'{sas_id_calibrators[0]}', "
     if len(sas_id_calibrators) == 2:
         dbstr += f"'{sas_id_calibrators[0]}', '{sas_id_calibrators[1]}', "
-    dbstr += f"'{sas_id_target}')"
+    dbstr += f"'{sas_id_target}', "
+    dbstr += ", ".join(
+        "NULL" if value is None else "'" + str(value).replace("'", "''") + "'"
+        for value in metadata.values()
+    ) + ")"
 
     cmd = ["sqlite3", dbname, dbstr]
     print(f"Adding field {field_name} to {table_name} via: {' '.join(cmd)}")
