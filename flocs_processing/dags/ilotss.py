@@ -311,8 +311,6 @@ def ilotss():
                     stager.target_uris = set()
                     for product in products:
                         archive_file = ((FileObject.data_object == product) & (FileObject.isValid > 0)).max("creation_date")
-                        if archive_file is None or not archive_file.URI:
-                            raise AirflowFailException(f"No valid archive file for target {field['sas_id_target']}, subband {product.subband}.")
                         stager.target_uris.add(archive_file.URI)
                     with open(f"srms_{field['sas_id_target']}.txt", "w") as request:
                         for uri in sorted(stager.target_uris):
