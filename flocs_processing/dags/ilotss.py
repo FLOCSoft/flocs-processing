@@ -299,6 +299,10 @@ def ilotss():
                 print(f"Field {field['sas_id_target']} is not downloaded.")
                 stager = ObservationStager(get_surls=False)
                 stager.find_observation_by_sasid("ALL", field["sas_id_target"])
+                if stage_calibrators:
+                    stager.get_surls = True
+                    stager.find_nearest_calibrators(2, 120, 168)
+                    stage_id_calibrators = stager.stage_calibrators()
                 if stage_target:
                     _, products = get_target_products(
                         stager, field["target_name"], field["sas_id_target"],
@@ -313,11 +317,6 @@ def ilotss():
                     with open(f"srms_{field['sas_id_target']}.txt", "w") as request:
                         for uri in sorted(stager.target_uris):
                             request.write(uri + "\n")
-                if stage_calibrators:
-                    stager.get_surls = True
-                    stager.find_nearest_calibrators(2, 120, 168)
-                    stage_id_calibrators = stager.stage_calibrators()
-                if stage_target:
                     stage_id_target = stager.stage_target()
             else:
                 return field
