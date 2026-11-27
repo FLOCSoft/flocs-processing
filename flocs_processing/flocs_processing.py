@@ -146,6 +146,33 @@ def create_database(
         raise RuntimeError(f"Failed to create table {table_name} in database {dbname}.")
 
 
+def get_target_products(lookup, field_name, sas_id_target, minfreq=None, maxfreq=None):
+    products = CorrelatedDataProduct.isValid == 1
+    if str(lookup.obsid) == str(sas_id_target):
+        products &= CorrelatedDataProduct.observation.observationId == lookup.obsid
+    else:
+        products &= CorrelatedDataProduct.pipeline.observationId == sas_id_target
+    if minfreq is not None:
+        products &= CorrelatedDataProduct.minimumFrequency >= minfreq
+    if maxfreq is not None:
+        products &= CorrelatedDataProduct.maximumFrequency <= maxfreq
+    products = list(products)
+    if not products:
+        raise ValueError(f"No valid target products for {field_name}, target {sas_id_target}, in the requested range.")
+    pointings = list(lookup.target.subArrayPointings)
+    named = [pointing for pointing in pointings if pointing.targetName == field_name]
+    if named:
+        pointings = named
+    sapids = {product.subArrayPointing.subArrayPointingIdentifier for product in products}
+    pointings = [pointing for pointing in pointings if pointing.subArrayPointingIdentifier in sapids]
+    if len(pointings) != 1:
+        raise ValueError(f"Cannot identify a unique beam for {field_name}, target {sas_id_target}.")
+    pointing = pointings[0]
+    products = [product for product in products
+                if product.subArrayPointing.subArrayPointingIdentifier == pointing.subArrayPointingIdentifier]
+    return pointing, products
+
+
 @app.command()
 def add_field(
     field_name: Annotated[str, Parameter(help="Name of the source/field to add.")],
@@ -170,7 +197,17 @@ def add_field(
     pipelines: Annotated[
         str, Parameter(help="Pipelines this field needs to be processed with.")
     ] = "",
+    freq_min_mhz: Annotated[
+        Optional[float], Parameter(help="Minimum target frequency in MHz.")
+    ] = None,
+    freq_max_mhz: Annotated[
+        Optional[float], Parameter(help="Maximum target frequency in MHz.")
+    ] = None,
 ):
+    if intent != "vlbi-widefield" and (freq_min_mhz is not None or freq_max_mhz is not None):
+        raise ValueError("Frequency bounds are currently supported for vlbi-widefield.")
+    if freq_min_mhz is not None and freq_max_mhz is not None and freq_min_mhz >= freq_max_mhz:
+        raise ValueError("Minimum target frequency must be below maximum target frequency.")
     if not pipelines and intent == "vlbi-widefield":
         pipelines = "linc,ddf-pipeline,vlbi-delay-widefield"
     elif not pipelines and intent == "vlbi-single-target":
@@ -185,23 +222,7 @@ def add_field(
     except SystemExit as error:
         raise LookupError(f"No LTA metadata found for target {sas_id_target}.") from error
     observation = lookup.target
-    products = CorrelatedDataProduct.isValid == 1
-    if str(lookup.obsid) == str(sas_id_target):
-        products &= CorrelatedDataProduct.observation.observationId == lookup.obsid
-    else:
-        products &= CorrelatedDataProduct.pipeline.observationId == sas_id_target
-    products = list(products)
-    pointings = list(observation.subArrayPointings)
-    named = [pointing for pointing in pointings if pointing.targetName == field_name]
-    if named:
-        pointings = named
-    sapids = {product.subArrayPointing.subArrayPointingIdentifier for product in products}
-    pointings = [pointing for pointing in pointings if pointing.subArrayPointingIdentifier in sapids]
-    if len(pointings) != 1:
-        raise ValueError(f"Cannot identify a unique beam for {field_name}, target {sas_id_target}.")
-    pointing = pointings[0]
-    products = [product for product in products
-                if product.subArrayPointing.subArrayPointingIdentifier == pointing.subArrayPointingIdentifier]
+    pointing, products = get_target_products(lookup, field_name, sas_id_target, freq_min_mhz, freq_max_mhz)
     widths = {product.channelWidth for product in products}
     intervals = {product.integrationInterval for product in products}
     coordinates = pointing.pointing

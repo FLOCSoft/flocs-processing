@@ -1,6 +1,6 @@
 from enum import Enum
 from flocs_processing.db_utils import PIPELINE_STATUS, FlocsDB
-from flocs_processing.flocs_processing import FIELD_STATUS
+from flocs_processing.flocs_processing import FIELD_STATUS, get_target_products
 from flocs_processing.pipeline_runners import (
     get_most_recent_run,
     get_ddf_job_id_from_log,
@@ -42,6 +42,7 @@ from airflow.task.trigger_rule import TriggerRule
 
 try:
     from flocs_lta.lta_search import ObservationStager
+    from awlofar.main.aweimports import FileObject
     from stager_access import (
         get_surls_requested,
         get_surls_online,
@@ -296,15 +297,31 @@ def ilotss():
 
             if stage_calibrators or stage_target:
                 print(f"Field {field['sas_id_target']} is not downloaded.")
-                stager = ObservationStager(get_surls=True)
-                stager.find_observation_by_sasid(
-                    "ALL",
-                    field["sas_id_target"],
-                    None,
-                    120,
-                    168,
-                )
+                stager = ObservationStager(get_surls=False)
+                stager.find_observation_by_sasid("ALL", field["sas_id_target"])
+                if stage_target:
+                    pointing, products = get_target_products(
+                        stager, field["target_name"], field["sas_id_target"],
+                        field["freq_min_mhz"], field["freq_max_mhz"],
+                    )
+                    coordinates = pointing.pointing
+                    selected_coordinates = (
+                        coordinates.rightAscension if coordinates is not None else None,
+                        coordinates.declination if coordinates is not None else None,
+                    )
+                    if selected_coordinates != (field["pointing_ra_deg"], field["pointing_dec_deg"]):
+                        raise AirflowFailException("Selected archive beam does not match the registered pointing.")
+                    stager.target_uris = set()
+                    for product in products:
+                        archive_file = ((FileObject.data_object == product) & (FileObject.isValid > 0)).max("creation_date")
+                        if archive_file is None or not archive_file.URI:
+                            raise AirflowFailException(f"No valid archive file for target {field['sas_id_target']}, subband {product.subband}.")
+                        stager.target_uris.add(archive_file.URI)
+                    with open(f"srms_{field['sas_id_target']}.txt", "w") as request:
+                        for uri in sorted(stager.target_uris):
+                            request.write(uri + "\n")
                 if stage_calibrators:
+                    stager.get_surls = True
                     stager.find_nearest_calibrators(2, 120, 168)
                     stage_id_calibrators = stager.stage_calibrators()
                 if stage_target:
