@@ -157,8 +157,6 @@ def get_target_products(lookup, field_name, sas_id_target, minfreq=None, maxfreq
     if maxfreq is not None:
         products &= CorrelatedDataProduct.maximumFrequency <= maxfreq
     products = list(products)
-    if not products:
-        raise ValueError(f"No valid target products for {field_name}, target {sas_id_target}, in the requested range.")
     pointings = list(lookup.target.subArrayPointings)
     named = [pointing for pointing in pointings if pointing.targetName == field_name]
     if named:
