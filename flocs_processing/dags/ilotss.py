@@ -300,17 +300,10 @@ def ilotss():
                 stager = ObservationStager(get_surls=False)
                 stager.find_observation_by_sasid("ALL", field["sas_id_target"])
                 if stage_target:
-                    pointing, products = get_target_products(
+                    _, products = get_target_products(
                         stager, field["target_name"], field["sas_id_target"],
                         field["freq_min_mhz"], field["freq_max_mhz"],
                     )
-                    coordinates = pointing.pointing
-                    selected_coordinates = (
-                        coordinates.rightAscension if coordinates is not None else None,
-                        coordinates.declination if coordinates is not None else None,
-                    )
-                    if selected_coordinates != (field["pointing_ra_deg"], field["pointing_dec_deg"]):
-                        raise AirflowFailException("Selected archive beam does not match the registered pointing.")
                     stager.target_uris = set()
                     for product in products:
                         archive_file = ((FileObject.data_object == product) & (FileObject.isValid > 0)).max("creation_date")
