@@ -346,8 +346,8 @@ def pilot_single_target():
                                     target_coordinates.dec.deg,
                                     TARGET_COORDINATE_MATCH_RADIUS_DEG,
                                     0,
-                                    120,
-                                    168,
+                                    field["freq_min_mhz"],
+                                    field["freq_max_mhz"],
                                 )
                             except SystemExit:
                                 # The current stager exits on multiple positional
@@ -380,8 +380,8 @@ def pilot_single_target():
                             "ALL",
                             selected_sasid,
                             selected_sapid,
-                            120,
-                            168,
+                            field["freq_min_mhz"],
+                            field["freq_max_mhz"],
                         )
                         if str(stager.obsid) != selected_sasid:
                             raise ValueError(
@@ -398,8 +398,8 @@ def pilot_single_target():
                             "ALL",
                             field["sas_id_target"],
                             None,
-                            120,
-                            168,
+                            field["freq_min_mhz"],
+                            field["freq_max_mhz"],
                         )
                         if stager.sapid is None:
                             usable_saps = [
