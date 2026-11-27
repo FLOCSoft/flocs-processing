@@ -202,8 +202,6 @@ def add_field(
         Optional[float], Parameter(help="Maximum target frequency in MHz.")
     ] = None,
 ):
-    if intent != "vlbi-widefield" and (freq_min_mhz is not None or freq_max_mhz is not None):
-        raise ValueError("Frequency bounds are currently supported for vlbi-widefield.")
     if freq_min_mhz is not None and freq_max_mhz is not None and freq_min_mhz >= freq_max_mhz:
         raise ValueError("Minimum target frequency must be below maximum target frequency.")
     if not pipelines and intent == "vlbi-widefield":
